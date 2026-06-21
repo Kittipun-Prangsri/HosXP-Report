@@ -1,0 +1,1387 @@
+<script>
+// ============================================================
+//  1. GLOBAL STATE & CONFIGURATION
+// ============================================================
+const App = {
+  user:         null,
+  requests:     [],
+  allUsers:     [], // เพื่อเก็บข้อมูลผู้ใช้ทั้งหมดสำหรับแอดมิน
+  currentReq:   null,
+  deleteTarget: null,
+  filterStatus: "",
+  filterDept:   "",
+  searchQuery:  "",
+};
+
+let dashboardTimer = null; // ตัวตั้งเวลาสำหรับระบบ Real-time Dashboard
+
+// ============================================================
+//  2. GOOGLE SCRIPT BRIDGE (BACKEND LINK)
+// ============================================================
+const GS = {
+  call(fn, ...args) {
+    return new Promise((resolve) => {
+      if (typeof google !== "undefined" && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(err => resolve({ success: false, message: err.message }))
+          [fn](...args);
+      } else {
+        // Fallback สำหรับใช้งานตรวจสอบรีวิวบนคอมพิวเตอร์ (Mock Data)
+        resolve(MockData[fn](...args));
+      }
+    });
+  }
+};
+
+// ============================================================
+//  3. MOCK DATA ENGINE (สำหรับจำลองระบบ)
+// ============================================================
+const MOCK_REQUESTS = [
+  { id:"1", requestNo:"REQ250523-0001", requesterName:"กิตติศักดิ์ ศรีราศรี", requesterEmail:"doctor01@hospital.go.th", department:"อายุรกรรม", reportType:"รายงานผู้ป่วยนอก (OPD)", dateFrom:"2026-05-23T00:00:00.000Z", dateTo:"2026-05-24T00:00:00.000Z", purpose:"ดึงรายงาน", urgency:"ปกติ", status:"รอดำเนินการ", adminNote:"", createdAt:"2026-06-01T09:00:00Z", updatedAt:"2026-06-01T09:00:00Z", createdBy:"doctor01" }
+];
+
+const MOCK_USERS = [
+  { username:"admin", password:"admin1234", displayName:"ผู้ดูแลระบบ", email:"admin@hospital.go.th", role:"admin", department:"สารสนเทศ", lineId:"", telegramId:"" },
+  { username:"doctor01", password:"doc1234", displayName:"กิตติศักดิ์ ศรีราศรี", email:"doctor01@hospital.go.th", role:"doctor", department:"อายุรกรรม", lineId:"", telegramId:"" }
+];
+
+const MockData = {
+  login(username, password) {
+    const u = MOCK_USERS.find(x => String(x.username).trim() === String(username).trim() && String(x.password).trim() === String(password).trim());
+    if (u) return { success: true, user: u };
+    return { success: false, message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" };
+  },
+  getRequests() { return { success: true, data: MOCK_REQUESTS }; },
+  getDashboardStats() {
+    return { success: true, data: {
+      total: MOCK_REQUESTS.length,
+      pending: MOCK_REQUESTS.filter(r=>r.status==="รอดำเนินการ").length,
+      processing: MOCK_REQUESTS.filter(r=>r.status==="กำลังดำเนินการ").length,
+      completed: MOCK_REQUESTS.filter(r=>r.status==="เสร็จสิ้น").length,
+      rejected: MOCK_REQUESTS.filter(r=>r.status==="ปฏิเสธ").length,
+      recent: MOCK_REQUESTS.slice(-5).reverse()
+    }};
+  },
+  createRequest(payload, username) {
+    const id = "mock-" + Date.now();
+    const requestNo = "REQ" + Date.now().toString().slice(-6);
+    MOCK_REQUESTS.push({ id, requestNo, ...payload, status:"รอดำเนินการ", adminNote:"", createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), createdBy:username });
+    return { success: true, id, requestNo };
+  },
+  updateRequest(id, payload) {
+    const idx = MOCK_REQUESTS.findIndex(r=>r.id==id);
+    if (idx >= 0) Object.assign(MOCK_REQUESTS[idx], payload, { updatedAt: new Date().toISOString() });
+    return { success: true };
+  },
+  deleteRequest(id) {
+    const idx = MOCK_REQUESTS.findIndex(r=>r.id==id);
+    if (idx >= 0) MOCK_REQUESTS.splice(idx, 1);
+    return { success: true };
+  },
+  getUsers() { return { success: true, data: MOCK_USERS }; },
+  saveUser(payload) {
+    const idx = MOCK_USERS.findIndex(x => String(x.username).trim() === String(payload.username).trim());
+    if (idx >= 0) Object.assign(MOCK_USERS[idx], payload);
+    else MOCK_USERS.push(payload);
+    return { success: true };
+  },
+  deleteUser(username) {
+    const idx = MOCK_USERS.findIndex(x => String(x.username).trim() === String(username).trim());
+    if (idx >= 0) MOCK_USERS.splice(idx, 1);
+    return { success: true };
+  },
+  testLineNotification(targetId) { return { success: true, message: "ส่งข้อความทดสอบเข้า LINE เรียบร้อยแล้ว (ID: " + (targetId || "แอดมินกลุ่ม") + ")" }; },
+  sendReportEmail() { return { success: true }; },
+  getMonthlyReport() { return { success: true, data: MOCK_REQUESTS }; },
+  updateProfile(username, payload) {
+    const u = MOCK_USERS.find(x => String(x.username).trim() === String(username).trim());
+    if (u) {
+      u.lineId = payload.lineId;
+      u.telegramId = payload.telegramId;
+      return { success: true };
+    }
+    return { success: false, message: "ไม่พบผู้ใช้ที่ต้องการแก้ไข" };
+  },
+  testTelegramNotification(chatId) { return { success: true, message: "ส่งข้อความทดสอบเข้า Telegram แล้ว" }; }
+};
+
+// ════════════════════════════════════════════════════════
+//  4. UTILITIES & FORMATTERS
+// ════════════════════════════════════════════════════════
+function toast(msg, type="info") {
+  const c = document.getElementById("toast-container");
+  if (!c) return;
+  const el = document.createElement("div");
+  el.className = `toast ${type}`;
+  const icons = { success:"✅", error:"❌", info:"ℹ️" };
+  el.innerHTML = `<span>${icons[type]||"ℹ️"}</span><span>${msg}</span>`;
+  c.appendChild(el);
+  setTimeout(() => { 
+    el.style.opacity="0"; el.style.transform="translateX(20px)"; el.style.transition="all .3s"; 
+    setTimeout(()=>el.remove(), 300); 
+  }, 3000);
+}
+
+function openModal(id) { const el = document.getElementById(id); if (el) el.classList.add("open"); }
+function closeModal(id) { const el = document.getElementById(id); if (el) el.classList.remove("open"); }
+
+function statusBadge(s) {
+  const map = { "รอดำเนินการ":"badge-pending","กำลังดำเนินการ":"badge-process","เสร็จสิ้น":"badge-done","ปฏิเสธ":"badge-rejected" };
+  return `<span class="badge ${map[s]||'badge-normal'}">${s}</span>`;
+}
+function urgencyBadge(u) {
+  const map = { "ด่วนที่สุด":"badge-urgent","สูง":"badge-high","ปกติ":"badge-normal" };
+  return `<span class="badge ${map[u]||'badge-normal'}">${u}</span>`;
+}
+function formatDate(iso) {
+  if (!iso) return "-";
+  try { return new Date(iso).toLocaleDateString("th-TH", { year:"numeric", month:"short", day:"numeric" }); } catch { return iso; }
+}
+
+function formatThaiDate(d) {
+  if (!d) return "-";
+  try {
+    const dateObj = new Date(d);
+    if (isNaN(dateObj.getTime())) {
+      const parts = d.split("T")[0].split("-");
+      if (parts.length === 3) {
+        const [y, m, dd] = parts;
+        const months = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+        return `${parseInt(dd)} ${months[parseInt(m)-1]} ${parseInt(y)+543}`;
+      }
+      return d;
+    }
+    const dd = dateObj.getDate();
+    const m = dateObj.getMonth();
+    const y = dateObj.getFullYear();
+    const months = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+    return `${dd} ${months[m]} ${y + 543}`;
+  } catch (e) { return d; }
+}
+
+function statusColor(s) {
+  return { "รอดำเนินการ":"#f9ab00","กำลังดำเนินการ":"#4285f4","เสร็จสิ้น":"#1e8e3e","ปฏิเสธ":"#d93025" }[s]||"#9aa0a6";
+}
+
+// ============================================================
+//  5. AUTHENTICATION (SYSTEM LOGIN / LOGOUT)
+// ============================================================
+async function doLogin() {
+  const errEl = document.getElementById("login-error");
+  if (errEl) errEl.style.display = "none";
+
+  const uEl = document.getElementById("login-username");
+  const pEl = document.getElementById("login-password");
+  if (!uEl || !pEl) return;
+
+  const u = uEl.value.trim();
+  const p = pEl.value.trim();
+
+  if (!u || !p) {
+    showLoginError("กรุณากรอกชื่อผู้ใช้และรหัสผ่าน");
+    return;
+  }
+
+  const btnText = document.getElementById("login-btn-text");
+  const btn = document.getElementById("login-btn");
+  if (btnText && btn) {
+    btn.disabled = true;
+    btnText.textContent = "กำลังเข้าสู่ระบบ...";
+  }
+
+  try {
+    const res = await GS.call("login", u, p);
+    if (res.success) {
+      App.user = res.user;
+      const rem = document.getElementById("login-remember");
+      if (rem && rem.checked) {
+        localStorage.setItem("hosxp_username", u);
+        localStorage.setItem("hosxp_password", p);
+      } else {
+        localStorage.removeItem("hosxp_username");
+        localStorage.removeItem("hosxp_password");
+      }
+      
+      startApp();
+    } else {
+      showLoginError(res.message);
+    }
+  } catch (e) {
+    showLoginError("เกิดข้อผิดพลาดในการเชื่อมต่อ: " + e.message);
+  } finally {
+    if (btnText && btn) {
+      btn.disabled = false;
+      btnText.textContent = "เข้าสู่ระบบ";
+    }
+  }
+}
+
+function showLoginError(msg) {
+  const el = document.getElementById("login-error");
+  if (el) { el.textContent = "⚠️ " + msg; el.style.display = "block"; }
+}
+
+function logout() {
+  App.user = null; App.requests = [];
+  clearInterval(dashboardTimer);
+  
+  // รีเซ็ตแผงประวัติการคุยและการแสดงผลของ AI
+  const chatPanel = document.getElementById("ai-chat-panel");
+  if (chatPanel) chatPanel.style.display = "none";
+  
+  // ซ่อนวิดเจ็ต AI หลัก
+  const chatWidget = document.getElementById("ai-chat-widget");
+  if (chatWidget) chatWidget.style.display = "none";
+  
+  aiChatHistory = [
+    { role: "model", text: "มีข้อสงสัยเกี่ยวกับตารางข้อมูล HOSxP หรือตัวอย่างคำสั่ง SQL ดึงข้อมูลหรือไม่? สอบถามผมได้เลยครับ!" }
+  ];
+  const chatMsgs = document.getElementById("ai-chat-messages");
+  if (chatMsgs) {
+    chatMsgs.innerHTML = `<div class="chat-message model">มีข้อสงสัยเกี่ยวกับตารางข้อมูล HOSxP หรือตัวอย่างคำสั่ง SQL ดึงข้อมูลหรือไม่? สอบถามผมได้เลยครับ!</div>`;
+  }
+  
+  document.getElementById("app-shell").style.display = "none";
+  document.getElementById("login-screen").style.display = "flex";
+}
+
+// ============================================================
+//  6. APP INITIALIZATION & NAVIGATION
+// ============================================================
+function startApp() {
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("app-shell").style.display = "block";
+
+  const u = App.user;
+  const isAdmin = u.role === "admin";
+
+  document.getElementById("sidebar-username").textContent = u.displayName;
+  document.getElementById("sidebar-role").innerHTML = (isAdmin ? "ผู้ดูแลระบบ (IT)" : `เจ้าหน้าที่ ${u.department}`) + ' <span style="font-size: 10px; opacity: 0.7;">IT</span>';
+  document.getElementById("user-avatar").textContent = isAdmin ? "🛡️" : "👤";
+
+  document.querySelectorAll(".admin-only").forEach(el => el.style.display = isAdmin ? "block" : "none");
+  if (document.getElementById("ed-status-grp")) document.getElementById("ed-status-grp").style.display = isAdmin ? "block" : "none";
+  if (document.getElementById("ed-note-grp")) document.getElementById("ed-note-grp").style.display = isAdmin ? "block" : "none";
+
+  if (document.getElementById("nr-name")) document.getElementById("nr-name").value = u.displayName;
+  if (document.getElementById("nr-email")) document.getElementById("nr-email").value = u.email;
+  const deptSel = document.getElementById("nr-dept");
+  if (deptSel) {
+    for (const opt of deptSel.options) { if (opt.value === u.department) { opt.selected = true; break; } }
+  }
+
+  // แสดง AI Chat Widget
+  const chatWidget = document.getElementById("ai-chat-widget");
+  if (chatWidget) chatWidget.style.display = "block";
+
+  // อัปเดต Role Badge ใน Chat
+  const roleBadge = document.getElementById("ai-chat-role");
+  if (roleBadge) {
+    roleBadge.textContent = isAdmin ? "Admin (SQL Mode)" : "Medical Staff (Helper)";
+    roleBadge.style.background = isAdmin ? "rgba(255, 255, 255, 0.25)" : "rgba(255, 255, 255, 0.15)";
+  }
+
+  // กำหนดข้อความต้อนรับและประวัติการคุยตามบทบาทผู้ใช้
+  const welcomeText = isAdmin 
+    ? "สวัสดีครับแอดมิน! ผมพร้อมช่วยวิเคราะห์ตาราง HOSxP และร่าง SQL ให้คุณแล้ว ต้องการดึงข้อมูลส่วนไหนบอกได้เลยครับ" 
+    : "สวัสดีครับ! ผมคือผู้ช่วย AI ยินดีให้คำแนะนำเกี่ยวกับการขอรายงานข้อมูล หากคุณไม่แน่ใจว่าต้องระบุข้อมูลอะไร สอบถามผมได้เลยครับ";
+  aiChatHistory = [{ role: "model", text: welcomeText }];
+  const chatMsgs = document.getElementById("ai-chat-messages");
+  if (chatMsgs) {
+    chatMsgs.innerHTML = `<div class="chat-message model">${welcomeText}</div>`;
+  }
+
+  navigate("dashboard");
+}
+
+function navigate(page) {
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+  
+  const pg = document.getElementById("page-" + page);
+  if (pg) pg.classList.add("active");
+  const nav = document.querySelector(`[data-page="${page}"]`);
+  if (nav) nav.classList.add("active");
+  
+  const titles = { dashboard:"แดชบอร์ด", requests:"คำขอรายงาน", "new-request":"สร้างคำขอใหม่", logs:"บันทึกกิจกรรม", users:"จัดการผู้ใช้", settings:"จัดการโปรไฟล์ส่วนตัว" };
+  document.getElementById("page-title").textContent = titles[page] || page;
+  
+  clearInterval(dashboardTimer);
+  if (page === "dashboard") {
+    loadDashboard();
+    dashboardTimer = setInterval(() => {
+      if (document.getElementById("page-dashboard").classList.contains("active")) {
+        loadDashboard();
+      }
+    }, 30000);
+  }
+  if (page === "requests") loadRequests();
+  if (page === "logs") loadLogs();
+  if (page === "users") loadUsers();
+  if (page === "settings") loadSettings();
+}
+
+// --- PROFILE / SETTINGS ENGINE ---------------------------
+function loadSettings() {
+  const u = App.user;
+  if (!u) return;
+  document.getElementById("set-username").value = u.username || "";
+  document.getElementById("set-password").value = u.password || "";
+  document.getElementById("set-display").value = u.displayName || "";
+  document.getElementById("set-dept").value = u.department || "";
+  document.getElementById("set-email").value = u.email || "";
+  document.getElementById("set-lineid").value = u.lineId || "";
+  document.getElementById("set-telegramid").value = u.telegramId || "";
+}
+
+async function saveSettings() {
+  const payload = {
+    password:    document.getElementById("set-password").value,
+    displayName: document.getElementById("set-display").value.trim(),
+    email:       document.getElementById("set-email").value.trim(),
+    department:  document.getElementById("set-dept").value.trim(),
+    lineId:      document.getElementById("set-lineid").value.trim(),
+    telegramId:  document.getElementById("set-telegramid").value.trim()
+  };
+  
+  if (!payload.displayName) { toast("กรุณากรอกชื่อที่แสดง", "error"); return; }
+  
+  const btn = document.getElementById("set-save-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "กำลังบันทึก..."; }
+  
+  const res = await GS.call("updateProfile", App.user.username, payload);
+  
+  if (btn) { btn.disabled = false; btn.textContent = "💾 บันทึกตั้งค่า"; }
+  
+  if (res.success) {
+    // อัปเดตข้อมูลใน App.user ด้วย
+    if (payload.password) App.user.password = payload.password;
+    App.user.displayName = payload.displayName;
+    App.user.email = payload.email;
+    App.user.department = payload.department;
+    App.user.lineId = payload.lineId;
+    App.user.telegramId = payload.telegramId;
+    
+    document.getElementById("sidebar-username").textContent = App.user.displayName;
+    document.getElementById("sidebar-role").innerHTML = (App.user.role === "admin" ? "ผู้ดูแลระบบ (IT)" : `เจ้าหน้าที่ ${App.user.department}`) + ' <span style="font-size: 10px; opacity: 0.7;">IT</span>';
+    document.getElementById("set-password").value = "";
+    toast("บันทึกข้อมูลส่วนตัวและตั้งค่าการแจ้งเตือนสำเร็จ", "success");
+  } else {
+    toast(res.message || "เกิดข้อผิดพลาดในการบันทึก", "error");
+  }
+}
+
+async function testPersonalLine() {
+  const lineId = document.getElementById("set-lineid").value.trim();
+  if (!lineId) { toast("กรุณากรอก LINE ID ก่อนทดสอบ", "error"); return; }
+  
+  toast("กำลังส่งข้อความทดสอบ LINE...", "info");
+  const res = await GS.call("testLineNotification", lineId);
+  if (res.success) {
+    toast(res.message, "success");
+  } else {
+    toast(res.message || "เกิดข้อผิดพลาดในการทดสอบ LINE", "error");
+  }
+}
+
+async function testPersonalTelegram() {
+  const telegramId = document.getElementById("set-telegramid").value.trim();
+  if (!telegramId) { toast("กรุณากรอก Telegram Chat ID ก่อนทดสอบ", "error"); return; }
+  
+  toast("กำลังส่งข้อความทดสอบเข้า Telegram...", "info");
+  const res = await GS.call("testTelegramNotification", telegramId);
+  if (res.success) {
+    toast(res.message, "success");
+  } else {
+    toast(res.message || "เกิดข้อผิดพลาดในการทดสอบ Telegram", "error");
+  }
+}
+
+// ============================================================
+//  7. DASHBOARD ENGINE
+// ============================================================
+let dashboardFilter = "";
+
+async function loadDashboard() {
+  const res = await GS.call("getDashboardStats", App.user.username, App.user.role, App.user.displayName);
+  if (!res.success) return;
+  const d = res.data;
+  
+  document.getElementById("stat-total").textContent      = d.total;
+  document.getElementById("stat-pending").textContent    = d.pending;
+  document.getElementById("stat-processing").textContent = d.processing;
+  document.getElementById("stat-done").textContent       = d.completed;
+  document.getElementById("stat-rejected").textContent   = d.rejected;
+
+  const total = d.total || 1;
+  const segs = document.querySelectorAll("#progress-bar .progress-seg");
+  const vals = [d.pending, d.processing, d.completed, d.rejected];
+  segs.forEach((s, i) => { s.style.width = ((vals[i]/total)*100).toFixed(1) + "%"; });
+
+  // อัปเดตสถานะการกรองบน UI
+  const filterInfo = document.getElementById("dashboard-filter-info");
+  const currentFilterText = document.getElementById("current-dashboard-filter");
+  if (dashboardFilter) {
+    if (filterInfo) filterInfo.style.display = "block";
+    if (currentFilterText) currentFilterText.textContent = dashboardFilter;
+  } else {
+    if (filterInfo) filterInfo.style.display = "none";
+  }
+
+  // ไฮไลท์ Card ที่เลือก
+  document.querySelectorAll(".stat-card").forEach(c => {
+    if (c.dataset.filter === dashboardFilter) c.classList.add("selected");
+    else c.classList.remove("selected");
+  });
+
+  // อัปเดตตัวเลข Sidebar Badge
+  const badge = document.getElementById("nav-badge-pending");
+  if (badge) {
+    if (d.pending > 0) {
+      badge.textContent = d.pending;
+      badge.style.display = "inline-block";
+    } else {
+      badge.style.display = "none";
+    }
+  }
+
+  // ตรวจจับคำขอใหม่และแจ้งเตือน In-App
+  if (App.user && App.user.role === "admin") {
+    if (App.lastPendingCount !== -1 && d.pending > App.lastPendingCount) {
+      playNotificationSound();
+      toast("🔔 มีคำขอรายงานใหม่เข้าระบบ!", "info");
+    }
+    App.lastPendingCount = d.pending;
+  }
+
+  const list = document.getElementById("recent-list");
+  let displayRecent = d.recent;
+  if (dashboardFilter) {
+    displayRecent = displayRecent.filter(r => r.status === dashboardFilter);
+  }
+
+  if (!displayRecent || displayRecent.length === 0) {
+    list.innerHTML = `<div class="empty-state">ไม่พบรายการที่มีสถานะ "${dashboardFilter || 'ทั้งหมด'}" ใน 10 รายการล่าสุด</div>`;
+    return;
+  }
+  
+  list.innerHTML = displayRecent.map(r => {
+    const isOwner = (r.createdBy === App.user.displayName || String(r.createdBy).trim() === String(App.user.username).trim());
+    const ownerBadge = isOwner ? '<b style="color:#e37400;"> [คำขอของฉัน]</b>' : '';
+    return `
+    <div class="recent-item" onclick="showDetail('${r.id}')">
+      <div class="recent-dot" style="background:${statusColor(r.status)}"></div>
+      <div class="recent-info">
+        <div class="recent-no">${r.requestNo}${ownerBadge}</div>
+        <div class="recent-name">${r.requesterName} — ${r.reportType}</div>
+      </div>
+      <div class="recent-time">${formatThaiDate(r.createdAt)}</div>
+      ${statusBadge(r.status)}
+    </div>`;
+  }).join("");
+}
+
+function resetDashboardFilter() {
+  dashboardFilter = "";
+  loadDashboard();
+}
+
+// ============================================================
+//  8. REQUESTS QUEUE MANAGEMENT (TRANSPARENT QUEUE)
+// ============================================================
+async function loadRequests() {
+  const res = await GS.call("getRequests", App.user.username, App.user.role, App.user.displayName);
+  if (res && res.success) { App.requests = res.data; renderTable(); }
+}
+
+function renderTable() {
+  const isAdmin = App.user.role === "admin";
+  const tbody = document.getElementById("requests-tbody");
+  if (!tbody) return;
+
+  const rows = App.requests.filter(r => {
+    const qs = App.searchQuery.toLowerCase();
+    const matchSearch = !qs || [r.requestNo, r.requesterName, r.department, r.reportType].some(v => (v || "").toLowerCase().includes(qs));
+    const matchStatus = !App.filterStatus || r.status === App.filterStatus;
+    const matchDept = !App.filterDept || r.department === App.filterDept;
+    return matchSearch && matchStatus && matchDept;
+  });
+
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">ไม่พบรายการคิวคำขอ</div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(r => {
+    const isOwner = (r.createdBy === App.user.displayName || String(r.createdBy).trim() === String(App.user.username).trim() || r.requesterName === App.user.displayName);
+    const canEdit = isAdmin || (isOwner && r.status === "รอดำเนินการ");
+    const canDelete = isAdmin || (isOwner && r.status === "รอดำเนินการ");
+    
+    const rowBgStyle = isOwner ? 'style="background-color: #fffde7;"' : '';
+    const ownerBadge = isOwner ? '<span style="color:#e37400; font-weight:bold; font-size:11px; display:block;">📝 คำขอของฉัน</span>' : '';
+
+    return `
+    <tr ${rowBgStyle} onclick="showDetail('${r.id}')">
+      <td><span class="req-no">${r.requestNo}</span>${ownerBadge}</td>
+      <td>${r.requesterName}</td>
+      <td>${r.department}</td>
+      <td>${r.reportType}</td>
+      <td>${urgencyBadge(r.urgency)}</td>
+      <td>${statusBadge(r.status)}</td>
+      <td>${formatDate(r.createdAt)}</td>
+      <td onclick="event.stopPropagation()">
+        <div class="td-actions">
+          <button class="btn btn-sm btn-secondary btn-icon" title="ดู" onclick="showDetail('${r.id}')">👁️</button>
+          ${canEdit ? `<button class="btn btn-sm btn-secondary btn-icon" title="แก้ไข" onclick="openEditModal('${r.id}')">✏️</button>` : ''}
+          <button class="btn btn-sm btn-secondary btn-icon" title="PDF" onclick="openPdfModal('${r.id}')">📄</button>
+          ${canDelete ? `<button class="btn btn-sm btn-danger btn-icon" title="ลบ" onclick="confirmDelete('${r.id}')">🗑️</button>` : ""}
+        </div>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+// ============================================================
+//  9. MODALS & FORMS LOGIC
+// ============================================================
+/* --- State & Helpers for New Multi-step Request Form --- */
+let selectedFormPriority = 'ปกติ';
+
+function toggleChip(el) {
+  el.classList.toggle('active');
+  updateFormStepsProgress();
+}
+
+function setFormPriority(p) {
+  selectedFormPriority = p;
+  const low = document.getElementById('nr-p-low');
+  const normal = document.getElementById('nr-p-normal');
+  const urgent = document.getElementById('nr-p-urgent');
+  
+  if (low) low.className = 'priority-card';
+  if (normal) normal.className = 'priority-card';
+  if (urgent) urgent.className = 'priority-card';
+  
+  if (p === 'ปกติ' && low) low.classList.add('sel-low');
+  if (p === 'สูง' && normal) normal.classList.add('sel-normal');
+  if (p === 'เร่งด่วน' && urgent) urgent.classList.add('sel-urgent');
+  updateFormStepsProgress();
+}
+
+function getFormChips(groupId) {
+  return Array.from(document.querySelectorAll('#' + groupId + ' .chip.active'))
+    .map(c => c.textContent.trim())
+    .join(', ');
+}
+
+// อัปเดตสเต็ป step-indicator เมื่อกรอกข้อมูลสมบูรณ์
+function updateFormStepsProgress() {
+  const step1 = document.getElementById('step1-indicator');
+  const step2 = document.getElementById('step2-indicator');
+  const step3 = document.getElementById('step3-indicator');
+
+  const nameVal = document.getElementById('nr-name')?.value.trim();
+  const emailVal = document.getElementById('nr-email')?.value.trim();
+  const deptVal = document.getElementById('nr-dept')?.value;
+
+  const typeVal = document.getElementById('nr-type')?.value.trim();
+  const purposeVal = document.getElementById('nr-purpose')?.value.trim();
+  const fromVal = document.getElementById('nr-from')?.value;
+  const toVal = document.getElementById('nr-to')?.value;
+
+  // Step 1: ข้อมูลผู้ขอ
+  if (nameVal && emailVal && deptVal) {
+    if (step1) step1.className = 'step-item active';
+  } else {
+    if (step1) step1.className = 'step-item';
+  }
+
+  // Step 2: รายละเอียดรายงาน
+  if (typeVal && purposeVal && fromVal && toVal) {
+    if (step2) step2.className = 'step-item active';
+  } else {
+    if (step2) step2.className = 'step-item';
+  }
+
+  // Step 3: ส่งคำขอ
+  if (selectedFormPriority) {
+    if (step3) step3.className = 'step-item active';
+  } else {
+    if (step3) step3.className = 'step-item';
+  }
+}
+
+// ตัวดักการป้อนข้อมูลเพื่ออัปเดตสเต็ปอัตโนมัติ
+function initFormAutoProgress() {
+  const ids = ['nr-name', 'nr-email', 'nr-dept', 'nr-type', 'nr-purpose', 'nr-from', 'nr-to'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateFormStepsProgress);
+    if (el) el.addEventListener('change', updateFormStepsProgress);
+  });
+}
+
+function showDetail(id) {
+  const r = App.requests.find(x => x.id == id);
+  if (!r) return;
+  App.currentReq = r;
+  const isAdmin = App.user.role === "admin";
+  
+  // รีเซ็ต AI Section เมื่อเปิดดูรายละเอียดใหม่
+  const aiSection = document.getElementById("detail-ai-section");
+  const aiResult = document.getElementById("detail-ai-result");
+  const aiBtn = document.getElementById("detail-ai-btn");
+  if (aiSection) aiSection.style.display = "none";
+  if (aiResult) aiResult.innerHTML = "";
+  if (aiBtn) {
+    aiBtn.disabled = false;
+    aiBtn.innerHTML = "🤖 วิเคราะห์ด้วย AI";
+  }
+
+  document.getElementById("detail-content").innerHTML = `
+    <div class="detail-item"><label>เลขที่คำขอ</label><div class="value req-no">${r.requestNo}</div></div>
+    <div class="detail-item"><label>สถานะ</label><div class="value">${statusBadge(r.status)}</div></div>
+    <div class="detail-item"><label>ชื่อผู้ขอ</label><div class="value">${r.requesterName}</div></div>
+    <div class="detail-item"><label>แผนก</label><div class="value">${r.department}</div></div>
+    <div class="detail-item"><label>เบอร์โทรศัพท์</label><div class="value">${r.requesterPhone || "-"}</div></div>
+    <div class="detail-item"><label>อีเมล</label><div class="value">${r.requesterEmail}</div></div>
+    <div class="detail-item" style="grid-column: 1/-1;"><label>ชื่อรายงาน / หัวข้อ</label><div class="value"><strong>${r.reportType}</strong></div></div>
+    <div class="detail-item"><label>ประเภทข้อมูลที่ต้องการ</label><div class="value">${r.dataType || "-"}</div></div>
+    <div class="detail-item"><label>รูปแบบไฟล์ที่ต้องการ</label><div class="value">${r.fileFormat || "-"}</div></div>
+    <div class="detail-item"><label>ช่วงวันที่ข้อมูล</label><div class="value">${formatThaiDate(r.dateFrom)} ถึง ${formatThaiDate(r.dateTo)}</div></div>
+    <div class="detail-item"><label>วันที่ต้องการรับรายงาน</label><div class="value">${formatThaiDate(r.neededDate)}</div></div>
+    <div class="detail-item"><label>ความเร่งด่วน</label><div class="value">${urgencyBadge(r.urgency)}</div></div>
+    <div class="detail-item" style="grid-column:1/-1"><label>Fields / คอลัมน์ที่ต้องการ</label><div class="value" style="white-space: pre-wrap;">${r.requestedFields || "-"}</div></div>
+    <div class="detail-item" style="grid-column:1/-1"><label>เงื่อนไขการกรองข้อมูล (Filter)</label><div class="value" style="white-space: pre-wrap;">${r.filterCondition || "-"}</div></div>
+    <div class="detail-item" style="grid-column:1/-1"><label>วัตถุประสงค์การใช้งาน</label><div class="value" style="white-space: pre-wrap;">${r.purpose}</div></div>
+    ${r.additionalNote ? `<div class="detail-item detail-note" style="grid-column:1/-1; background:#e8f0fe; border-left-color:#1a73e8;"><label>หมายเหตุ / ข้อมูลเพิ่มเติมจากผู้ขอ</label><div class="value" style="white-space: pre-wrap;">${r.additionalNote}</div></div>` : ""}
+    ${r.adminNote ? `<div class="detail-item detail-note" style="grid-column:1/-1"><label>หมายเหตุ Admin / ไอที</label><div class="value" style="white-space: pre-wrap;">${r.adminNote}</div></div>` : ""}
+  `;
+  const editBtn = document.getElementById("detail-edit-btn");
+  if (editBtn) {
+    editBtn.style.display = (isAdmin || r.status === "รอดำเนินการ") ? "" : "none";
+  }
+  if (aiBtn) {
+    aiBtn.style.display = isAdmin ? "" : "none";
+  }
+  openModal("modal-detail");
+}
+
+async function analyzeRequestWithAI() {
+  if (!App.currentReq) return;
+  const aiSection = document.getElementById("detail-ai-section");
+  const aiResult = document.getElementById("detail-ai-result");
+  const aiBtn = document.getElementById("detail-ai-btn");
+  if (!aiSection || !aiResult || !aiBtn) return;
+
+  aiSection.style.display = "block";
+  aiBtn.disabled = true;
+  aiBtn.innerHTML = 'กำลังประมวลผล... <div class="spinner" style="display:inline-block; width:12px; height:12px; border-width:2px; vertical-align:middle; margin-left:4px;"></div>';
+  
+  // แสดง Shimmer loading effect
+  aiResult.innerHTML = `
+    <div class="ai-shimmer title"></div>
+    <div class="ai-shimmer line1" style="margin-top:12px;"></div>
+    <div class="ai-shimmer line2"></div>
+    <div class="ai-shimmer line3"></div>
+    <div class="ai-shimmer line4"></div>
+  `;
+
+  // เลื่อนลงไปดูผลลัพธ์
+  setTimeout(() => {
+    aiSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, 100);
+
+  const res = await GS.call("askGeminiToAnalyzeRequest", App.currentReq.id);
+  aiBtn.disabled = false;
+  aiBtn.innerHTML = "🤖 วิเคราะห์ด้วย AI";
+
+  if (res.success) {
+    aiResult.innerHTML = renderAiMarkdown(res.analysis);
+  } else {
+    aiResult.innerHTML = `<div style="color:var(--red); font-weight:700;">⚠️ ${res.message}</div>`;
+  }
+}
+
+function renderAiMarkdown(text) {
+  if (!text) return "";
+  
+  // ป้องกัน XSS
+  let escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // แปลง Code block
+  escaped = escaped.replace(/```(?:sql|mysql|postgresql)?([\s\S]*?)```/g, (match, codeText) => {
+    const trimmedCode = codeText.trim();
+    return `<pre><code>${trimmedCode}</code><button class="ai-copy-btn" onclick="copySqlToClipboard(this)">📋 คัดลอก SQL</button></pre>`;
+  });
+
+  // แปลงตัวหนา
+  escaped = escaped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+
+  // แปลง Inline code
+  escaped = escaped.replace(/`(.*?)`/g, '<code style="background:var(--gray-200); padding:2px 6px; border-radius:4px; font-family:monospace; font-size:13px; font-weight:bold; color:var(--primary-dark);">$1</code>');
+
+  // จัดการ Newlines
+  const parts = escaped.split(/(<pre>[\s\S]*?<\/pre>)/);
+  for (let i = 0; i < parts.length; i++) {
+    if (!parts[i].startsWith("<pre>")) {
+      parts[i] = parts[i].replace(/\n/g, "<br>");
+    }
+  }
+  return parts.join("");
+}
+
+function copySqlToClipboard(btn) {
+  const pre = btn.parentElement;
+  const code = pre.querySelector("code");
+  if (!code) return;
+
+  const text = code.innerText || code.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const originalText = btn.innerHTML;
+    btn.innerHTML = "✅ คัดลอกสำเร็จ!";
+    toast("คัดลอก SQL Query เรียบร้อยแล้ว", "success");
+    setTimeout(() => {
+      btn.innerHTML = originalText;
+    }, 2000);
+  }).catch(err => {
+    toast("ไม่สามารถคัดลอกรหัสได้: " + err, "error");
+  });
+}
+
+// --- FLOATING AI CHATBOT SYSTEM --------------------------
+let aiChatHistory = [
+  { role: "model", text: "มีข้อสงสัยเกี่ยวกับตารางข้อมูล HOSxP หรือตัวอย่างคำสั่ง SQL ดึงข้อมูลหรือไม่? สอบถามผมได้เลยครับ!" }
+];
+
+function toggleChatPanel() {
+  const panel = document.getElementById("ai-chat-panel");
+  if (!panel) return;
+  
+  if (panel.style.display === "none") {
+    panel.style.display = "flex";
+    document.getElementById("ai-chat-input")?.focus();
+    scrollChatToBottom();
+  } else {
+    panel.style.display = "none";
+  }
+}
+
+async function sendChatMessage() {
+  const inputEl = document.getElementById("ai-chat-input");
+  if (!inputEl) return;
+  
+  const text = inputEl.value.trim();
+  if (!text) return;
+  
+  inputEl.value = "";
+  
+  // 1. แสดงข้อความของ User บน UI
+  appendChatMessage("user", text);
+  
+  // 2. บันทึกลงในประวัติการคุย
+  aiChatHistory.push({ role: "user", text: text });
+  
+  // 3. แสดงอนิเมชั่นกำลังพิมพ์ (Typing indicator)
+  showChatTypingIndicator();
+  
+  // 4. เรียกหลังบ้านเพื่อสอบถาม Gemini
+  const res = await GS.call("askGeminiChat", aiChatHistory, App.user ? App.user.role : "doctor");
+  
+  // 5. ลบอนิเมชั่นกำลังพิมพ์
+  removeChatTypingIndicator();
+  
+  if (res.success) {
+    // แสดงข้อความตอบกลับ
+    appendChatMessage("model", res.response);
+    aiChatHistory.push({ role: "model", text: res.response });
+  } else {
+    // แสดงข้อความผิดพลาด
+    appendChatMessage("system", `⚠️ ขออภัย เกิดข้อผิดพลาด: ${res.message}`);
+  }
+}
+
+function appendChatMessage(sender, text) {
+  const msgBox = document.getElementById("ai-chat-messages");
+  if (!msgBox) return;
+  
+  const msgDiv = document.createElement("div");
+  msgDiv.className = `chat-message ${sender}`;
+  
+  if (sender === "model") {
+    msgDiv.innerHTML = renderAiMarkdown(text);
+  } else {
+    // ป้องกัน XSS สำหรับ user/system
+    msgDiv.textContent = text;
+  }
+  
+  msgBox.appendChild(msgDiv);
+  scrollChatToBottom();
+}
+
+function showChatTypingIndicator() {
+  const msgBox = document.getElementById("ai-chat-messages");
+  if (!msgBox) return;
+  
+  // ป้องกันการสร้างซ้ำ
+  if (document.getElementById("ai-chat-typing")) return;
+  
+  const typingDiv = document.createElement("div");
+  typingDiv.id = "ai-chat-typing";
+  typingDiv.className = "chat-bubble-typing";
+  typingDiv.innerHTML = `
+    <div class="typing-dot"></div>
+    <div class="typing-dot"></div>
+    <div class="typing-dot"></div>
+  `;
+  msgBox.appendChild(typingDiv);
+  scrollChatToBottom();
+}
+
+function removeChatTypingIndicator() {
+  const el = document.getElementById("ai-chat-typing");
+  if (el) el.remove();
+}
+
+function scrollChatToBottom() {
+  const msgBox = document.getElementById("ai-chat-messages");
+  if (msgBox) {
+    msgBox.scrollTop = msgBox.scrollHeight;
+  }
+}
+
+
+function openEditModal(id) {
+  const r = id ? App.requests.find(x=>x.id==id) : App.currentReq;
+  if (!r) return;
+  const isAdmin = App.user.role === "admin";
+  if (!isAdmin && r.status !== "รอดำเนินการ") { toast("ไม่สามารถแก้ไขได้ เนื่องจากเจ้าหน้าที่รับเรื่องไปแล้ว", "error"); return; }
+  
+  App.currentReq = r;
+  document.getElementById("ed-name").value     = r.requesterName;
+  document.getElementById("ed-email").value    = r.requesterEmail;
+  document.getElementById("ed-dept").value     = r.department;
+  document.getElementById("ed-type").value     = r.reportType;
+  document.getElementById("ed-from").value     = r.dateFrom ? r.dateFrom.split('T')[0] : "";
+  document.getElementById("ed-to").value       = r.dateTo ? r.dateTo.split('T')[0] : "";
+  document.getElementById("ed-phone").value    = r.requesterPhone || "";
+  document.getElementById("ed-needDate").value = r.neededDate ? r.neededDate.split('T')[0] : "";
+  document.getElementById("ed-dataType").value = r.dataType || "";
+  document.getElementById("ed-format").value   = r.fileFormat || "";
+  document.getElementById("ed-urgency").value  = r.urgency;
+  document.getElementById("ed-purpose").value  = r.purpose;
+  document.getElementById("ed-fields").value   = r.requestedFields || "";
+  document.getElementById("ed-filter").value   = r.filterCondition || "";
+  document.getElementById("ed-note-user").value = r.additionalNote || "";
+  
+  if (isAdmin) {
+    if(document.getElementById("ed-status")) document.getElementById("ed-status").value = r.status;
+    if(document.getElementById("ed-note")) document.getElementById("ed-note").value = r.adminNote || "";
+  }
+  closeModal("modal-detail");
+  openModal("modal-edit");
+}
+
+async function saveEdit() {
+  const payload = {
+    requesterName:  document.getElementById("ed-name").value,
+    requesterEmail: document.getElementById("ed-email").value,
+    department:     document.getElementById("ed-dept").value,
+    reportType:     document.getElementById("ed-type").value,
+    dateFrom:       document.getElementById("ed-from").value,
+    dateTo:         document.getElementById("ed-to").value,
+    requesterPhone: document.getElementById("ed-phone").value,
+    neededDate:     document.getElementById("ed-needDate").value,
+    dataType:       document.getElementById("ed-dataType").value,
+    fileFormat:     document.getElementById("ed-format").value,
+    urgency:        document.getElementById("ed-urgency").value,
+    purpose:        document.getElementById("ed-purpose").value,
+    requestedFields:document.getElementById("ed-fields").value,
+    filterCondition:document.getElementById("ed-filter").value,
+    additionalNote: document.getElementById("ed-note-user").value,
+  };
+  if (App.user.role === "admin") {
+    payload.status = document.getElementById("ed-status").value;
+    payload.adminNote = document.getElementById("ed-note").value;
+  }
+  const res = await GS.call("updateRequest", App.currentReq.id, payload, App.user.username, App.user.role);
+  if (res.success) { 
+    toast("บันทึกสำเร็จ", "success"); 
+    closeModal("modal-edit"); 
+    loadRequests(); 
+    loadDashboard(); 
+  }
+}
+
+function confirmDelete(id) {
+  const r = App.requests.find(x=>x.id==id);
+  if (!r) return;
+  App.deleteTarget = id;
+  document.getElementById("delete-req-no").textContent = r.requestNo;
+  openModal("modal-delete");
+}
+
+async function doDelete() {
+  const res = await GS.call("deleteRequest", App.deleteTarget, App.user.username, App.user.role);
+  if (res.success) { toast("ลบสำเร็จ", "success"); closeModal("modal-delete"); loadRequests(); loadDashboard(); }
+}
+
+async function submitNewRequest() {
+  const payload = {
+    requesterName:  document.getElementById("nr-name").value.trim(),
+    requesterEmail: document.getElementById("nr-email").value.trim(),
+    department:     document.getElementById("nr-dept").value,
+    reportType:     document.getElementById("nr-type").value.trim(),
+    dateFrom:       document.getElementById("nr-from").value,
+    dateTo:         document.getElementById("nr-to").value,
+    purpose:        document.getElementById("nr-purpose").value.trim(),
+    requesterPhone: document.getElementById("nr-phone").value.trim(),
+    dataType:       getFormChips("nr-dataTypeGroup"),
+    requestedFields:document.getElementById("nr-fields").value.trim(),
+    filterCondition:document.getElementById("nr-filter").value.trim(),
+    fileFormat:     getFormChips("nr-formatGroup"),
+    urgency:        selectedFormPriority,
+    neededDate:     document.getElementById("nr-needDate").value,
+    additionalNote: document.getElementById("nr-note").value.trim()
+  };
+  
+  if (!payload.requesterName) { toast("กรุณากรอกชื่อผู้ขอ", "error"); return; }
+  if (!payload.department) { toast("กรุณาเลือกแผนก/ฝ่าย", "error"); return; }
+  if (!payload.requesterEmail) { toast("กรุณากรอกอีเมล", "error"); return; }
+  if (!payload.reportType) { toast("กรุณากรอกชื่อรายงาน / หัวข้อ", "error"); return; }
+  if (!payload.purpose) { toast("กรุณากรอกวัตถุประสงค์การใช้งาน", "error"); return; }
+  if (!payload.dateFrom || !payload.dateTo) { toast("กรุณากรอกช่วงวันที่ข้อมูลให้ครบ", "error"); return; }
+
+  const from = new Date(payload.dateFrom);
+  const to = new Date(payload.dateTo);
+  if (from > to) { toast("วันที่เริ่มต้นต้องไม่เกินวันที่สิ้นสุด", "error"); return; }
+
+  document.getElementById("nr-submit-btn").disabled = true;
+  document.getElementById("nr-submit-btn").innerHTML = 'กำลังส่งคำขอ... <div class="spinner" style="display:inline-block; width:14px; height:14px; border-width:2px; vertical-align:middle;"></div>';
+  
+  const res = await GS.call("createRequest", payload, App.user.username);
+  
+  document.getElementById("nr-submit-btn").disabled = false;
+  document.getElementById("nr-submit-btn").innerHTML = '📤 ส่งคำขอรายงาน';
+  
+  if (res.success) {
+    document.getElementById("new-req-form").style.display = "none";
+    document.getElementById("nr-success").style.display = "block";
+    document.getElementById("nr-success-msg").innerHTML = `
+      <strong>Ticket ID ของคุณคือ:</strong> <span class="ticket-pill" style="background:var(--green); color:#fff; padding:2px 8px; border-radius:4px; font-weight:700;">${res.requestNo}</span><br>
+      ระบบได้ส่งอีเมลยืนยันการรับคำขอไปยัง <strong>${payload.requesterEmail}</strong> เรียบร้อยแล้ว<br>
+      ทีมไอทีจะทำการดำเนินการและติดต่อกลับภายในกำหนดเวลา
+    `;
+    toast("ส่งคำขอเรียบร้อยแล้ว", "success");
+    loadDashboard();
+  } else {
+    toast(res.message || "เกิดข้อผิดพลาดในการส่งข้อมูล", "error");
+  }
+}
+
+function resetNewRequest() {
+  document.getElementById("new-req-form").style.display = "block";
+  document.getElementById("nr-success").style.display = "none";
+  document.getElementById("nr-purpose").value = "";
+  document.getElementById("nr-type").value = "";
+  document.getElementById("nr-phone").value = "";
+  document.getElementById("nr-fields").value = "";
+  document.getElementById("nr-filter").value = "";
+  document.getElementById("nr-note").value = "";
+  document.getElementById("nr-needDate").value = "";
+  document.getElementById("nr-from").value = "";
+  document.getElementById("nr-to").value = "";
+  
+  document.querySelectorAll("#nr-dataTypeGroup .chip.active").forEach(c => c.classList.remove("active"));
+  document.querySelectorAll("#nr-formatGroup .chip.active").forEach(c => c.classList.remove("active"));
+  
+  setFormPriority('ปกติ');
+  
+  const u = App.user;
+  if (u) {
+    document.getElementById("nr-name").value = u.displayName;
+    document.getElementById("nr-email").value = u.email;
+    const deptSel = document.getElementById("nr-dept");
+    if (deptSel) {
+      for (const opt of deptSel.options) { if (opt.value === u.department) { opt.selected = true; break; } }
+    }
+  }
+  updateFormStepsProgress();
+}
+
+// ============================================================
+//  10. PDF ENGINE & PRINT SCREEN CONTROL
+// ============================================================
+function openPdfModal(id) {
+  const r = id ? App.requests.find(x => x.id == id) : App.currentReq;
+  if (!r) { toast("ไม่พบข้อมูลคำขอรายงาน", "error"); return; }
+  
+  App.currentReq = r;
+  const contentEl = document.getElementById("pdf-content");
+  if (contentEl) {
+    contentEl.innerHTML = buildPdfHtml(r);
+    closeModal("modal-detail");
+    openModal("modal-pdf");
+  }
+}
+
+function buildPdfHtml(r) {
+  const today = new Date().toLocaleDateString("th-TH", { year:"numeric", month:"long", day:"numeric" });
+  return `
+  <div class="pdf-container" style="width:100%; font-family:'Sarabun',sans-serif;">
+    <div class="pdf-header" style="display:flex; align-items:center; gap:20px; border-bottom:2px solid #0f6e56; padding-bottom:10px; margin-bottom:20px;">
+      <div class="pdf-hospital-logo" style="font-size:36px;">🏥</div>
+      <div>
+        <div class="pdf-hospital-name" style="font-size:18px; font-weight:700; color:#0f6e56;">โรงพยาบาลคลองหาด</div>
+        <div class="pdf-hospital-sub" style="font-size:12px; color:#5f6368;">หมู่ 1 ต.คลองหาด อ.คลองหาด จ.สระแก้ว 26270 | โทรศัพท์ 037-266-011</div>
+      </div>
+    </div>
+    <div class="pdf-title" style="text-align:center; margin-bottom:25px;">
+      <h2 style="font-size:20px; color:#0f6e56;">ใบคำขอรายงานข้อมูลจากระบบ HOSxP (V.2)</h2>
+      <p style="font-size:13px; color:#5f6368; margin-top:5px;">เลขที่คำขอ: <strong>${r.requestNo}</strong> | วันที่พิมพ์: ${today}</p>
+    </div>
+    <table class="pdf-table info-table" style="width:100% !important; border-collapse:collapse; margin-bottom:25px; table-layout:fixed;">
+      <colgroup><col style="width:30%;"><col style="width:70%;"></colgroup>
+      <thead><tr><th colspan="2" style="text-align:center; background:#0f6e56 !important; color:#fff !important; padding:10px; font-size:14px; border:1px solid #0f6e56;">รายละเอียดผู้ขอและเครื่องมือข้อมูล</th></tr></thead>
+      <tbody>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600; width:30%;">ชื่อผู้ขอรายงาน</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word; width:70%;">${r.requesterName} (แผนก/ฝ่าย: ${r.department})</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">เบอร์โทรศัพท์ / อีเมล</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;">โทร. ${r.requesterPhone || "-"} | อีเมล: ${r.requesterEmail}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">ชื่อรายงาน / หัวข้อ</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;"><strong>${r.reportType}</strong></td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">ประเภทข้อมูลที่ต้องการ</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;">${r.dataType || "-"}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">รูปแบบไฟล์ที่ต้องการ</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;">${r.fileFormat || "-"}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">ช่วงวันที่ข้อมูลที่ต้องการ</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">${formatThaiDate(r.dateFrom)} ถึง ${formatThaiDate(r.dateTo)}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">วันที่ต้องการรับรายงาน</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;">${formatThaiDate(r.neededDate)}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">ความเร่งด่วน</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;">${r.urgency}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">วัตถุประสงค์การใช้งาน</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;">${r.purpose}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">Fields / คอลัมน์ที่ต้องการ</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;">${r.requestedFields || "-"}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">เงื่อนไขตัวกรอง (Filter)</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;">${r.filterCondition || "-"}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">หมายเหตุเพิ่มเติม</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;">${r.additionalNote || "-"}</td></tr>
+        <tr><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; background:#f8f9fa !important; font-weight:600;">สถานะการจัดทำ</td><td style="padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word;"><strong>${r.status}</strong> ${r.adminNote ? `(IT Note: ${r.adminNote})` : ""}</td></tr>
+      </tbody>
+    </table>
+    
+    <div class="pdf-sig-row" style="display:flex !important; justify-content:space-between !important; margin-top:60px !important;">
+      <div class="pdf-sig" style="width:30% !important; text-align:center !important;">
+        <div class="pdf-sig-line" style="border-bottom:1px solid #000; width:90%; margin:0 auto 10px;"></div>
+        <p style="margin:0; font-size:13px;">ผู้ขอรายงาน</p>
+        <p style="margin:4px 0 0; font-size:13px;">(${r.requesterName})</p>
+      </div>
+      <div class="pdf-sig" style="width:30% !important; text-align:center !important;">
+        <div class="pdf-sig-line" style="border-bottom:1px solid #000; width:90%; margin:0 auto 10px;"></div>
+        <p style="margin:0; font-size:13px;">เจ้าหน้าที่ IT ผู้รับเรื่อง</p>
+        <p style="margin:4px 0 0; font-size:13px;">กลุ่มงานเทคโนโลยีสารสนเทศ</p>
+      </div>
+      <div class="pdf-sig" style="width:30% !important; text-align:center !important;">
+        <div class="pdf-sig-line" style="border-bottom:1px solid #000; width:90%; margin:0 auto 10px;"></div>
+        <p style="margin:0; font-size:13px;">ผู้อนุมัติ</p>
+        <p style="margin:4px 0 0; font-size:13px;">หัวหน้ากลุ่มงาน IT/บริหาร</p>
+      </div>
+    </div>
+  </div>`;
+}
+
+function downloadPdf() {
+  const r = App.currentReq; if (!r) return;
+  const win = window.open("", "_blank", "width=850,height=900");
+  const html = document.getElementById("pdf-content").innerHTML;
+  win.document.write(`
+    <html><head><meta charset="UTF-8"><title>${r.requestNo}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+      @page { size: A4; margin: 2cm 1.5cm; }
+      body { font-family:'Sarabun',sans-serif; padding:0; margin:0; width:100%; }
+      .no-print-bar { background:#f1f3f4; padding:12px; text-align:right; border-bottom:1px solid #ddd; }
+      @media print { .no-print-bar { display:none !important; } }
+      .pdf-header { display:flex; align-items:center; gap:20px; border-bottom:2px solid #0f6e56; padding-bottom:10px; margin-bottom:20px; }
+      .pdf-hospital-logo { font-size:36px; } .pdf-hospital-name { font-size:18px; font-weight:700; color:#0f6e56; }
+      .pdf-title { text-align:center; margin-bottom:25px; } .pdf-title h2 { font-size:20px; color:#0f6e56; }
+      .pdf-table { width:100% !important; border-collapse:collapse; margin-bottom:25px; table-layout:fixed; }
+      .pdf-table th { background:#0f6e56 !important; color:#fff !important; padding:10px; font-size:14px; border:1px solid #0f6e56; }
+      .pdf-table td { padding:10px; border:1px solid #e0e0e0; font-size:14px; word-break:break-word; }
+      .info-table tr td:first-child { background:#f8f9fa !important; font-weight:600; }
+      .pdf-sig-row { display:flex !important; justify-content:space-between !important; margin-top:60px !important; }
+      .pdf-sig { width:30% !important; text-align:center !important; } .pdf-sig-line { border-bottom:1px solid #000; width:90%; margin:0 auto 10px; }
+    </style></head><body>
+    <div class="no-print-bar"><button onclick="window.print();" style="padding:8px 16px; background:#0f6e56; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">🖨️ บันทึกเป็น PDF / สั่งพิมพ์</button></div>
+    <div style="padding:0 10px;">${html}</div>
+    <script>window.onload=()=>{ setTimeout(()=>{ window.print(); },300); };<\/script></body></html>`);
+  win.document.close();
+}
+
+// ============================================================
+//  11. USER MANAGEMENT (ADMIN ONLY)
+// ============================================================
+async function loadUsers() {
+  const res = await GS.call("getUsers");
+  if (res.success) {
+    App.allUsers = res.data; // เก็บข้อมูลผู้ใช้ทั้งหมดลงใน App state
+    document.getElementById("users-tbody").innerHTML = res.data.map(u => `
+      <tr>
+        <td><strong>${u.username}</strong></td>
+        <td>${u.displayName}</td>
+        <td>${u.department}</td>
+        <td>${u.role === 'admin' ? '🛡️ Admin' : '👤 User'}</td>
+        <td>
+          <div class="td-actions" style="display:flex; gap:6px;">
+            <button class="btn btn-sm btn-secondary" onclick="editUser('${u.username}')">✏️ แก้ไข</button>
+            <button class="btn btn-sm btn-danger" onclick="confirmDeleteUser('${u.username}')">🗑️ ลบ</button>
+          </div>
+        </td>
+      </tr>`).join("");
+  }
+}
+
+let currentEditUsername = ""; 
+
+function openUserModal(data = null) {
+  const isEdit = !!data;
+  currentEditUsername = isEdit ? data.username : "";
+  document.getElementById("user-modal-title").textContent = isEdit ? "แก้ไขข้อมูลผู้ใช้" : "เพิ่มผู้ใช้ใหม่";
+  
+  const uName = document.getElementById("u-username");
+  if (uName) {
+    uName.value = isEdit ? data.username : "";
+    uName.disabled = isEdit; // แก้ไขไม่ได้ถ้าเป็นการแก้ข้อมูลเดิม
+    uName.style.background = isEdit ? "#f1f3f4" : "";
+  }
+  
+  if (document.getElementById("u-password"))   document.getElementById("u-password").value = isEdit ? data.password : "";
+  if (document.getElementById("u-display"))    document.getElementById("u-display").value = isEdit ? data.displayName : "";
+  if (document.getElementById("u-email"))      document.getElementById("u-email").value = isEdit ? data.email : "";
+  if (document.getElementById("u-lineid"))     document.getElementById("u-lineid").value = isEdit ? (data.lineId || "") : "";
+  if (document.getElementById("u-telegramid")) document.getElementById("u-telegramid").value = isEdit ? (data.telegramId || "") : "";
+  if (document.getElementById("u-role"))       document.getElementById("u-role").value = isEdit ? data.role : "doctor";
+  if (document.getElementById("u-dept"))       document.getElementById("u-dept").value = isEdit ? data.department : "";
+  
+  openModal("modal-user");
+}
+
+function editUser(username) {
+  const u = App.allUsers.find(x => String(x.username).trim() === String(username).trim());
+  if (u) {
+    openUserModal(u);
+  } else {
+    // กรณีค้นหาไม่พบใน state (อาจจะยังไม่ได้โหลดล่าสุด) ให้โหลดใหม่ทั้งหมด
+    GS.call("getUsers").then(res => {
+      if (res.success) {
+        App.allUsers = res.data;
+        const u2 = res.data.find(x => String(x.username).trim() === String(username).trim());
+        if (u2) openUserModal(u2);
+      }
+    });
+  }
+}
+
+async function handleSaveUser() {
+  const payload = {
+    oldUsername: currentEditUsername,
+    username:    document.getElementById("u-username").value.trim(),
+    password:    document.getElementById("u-password").value,
+    displayName: document.getElementById("u-display").value.trim(),
+    email:       document.getElementById("u-email").value.trim(),
+    lineId:      document.getElementById("u-lineid").value.trim(),
+    telegramId:  document.getElementById("u-telegramid").value.trim(),
+    role:        document.getElementById("u-role").value,
+    department:  document.getElementById("u-dept").value.trim()
+  };
+  
+  if(!payload.username || !payload.password) { toast("กรุณากรอก Username และ Password", "error"); return; }
+  
+  const res = await GS.call("saveUser", payload);
+  if (res.success) { 
+    toast("บันทึกข้อมูลผู้ใช้สำเร็จ", "success"); 
+    closeModal("modal-user"); 
+    loadUsers(); 
+  } else {
+    toast(res.message || "เกิดข้อผิดพลาด", "error");
+  }
+}
+
+function confirmDeleteUser(username) {
+  if (String(username).trim() === String(App.user.username).trim()) { toast("❌ คุณไม่สามารถลบตัวเองได้", "error"); return; }
+  if (confirm(`⚠️ คุณต้องการลบผู้ใช้ "${username}" ใช่หรือไม่?`)) { executeDeleteUser(username); }
+}
+
+async function executeDeleteUser(username) {
+  const res = await GS.call("deleteUser", username, App.user.username, App.user.role);
+  if (res.success) { toast("ลบเรียบร้อย", "success"); loadUsers(); }
+}
+
+// ============================================================
+//  12. MISC FEATURES (REPORTS & EMAIL & LOGS)
+// ============================================================
+async function downloadMonthlyReport() {
+  const m = document.getElementById("rep-month")?.value;
+  const y = document.getElementById("rep-year")?.value;
+  const res = await GS.call("getMonthlyReport", m, y);
+  if (res.success) { downloadCSV(res.data, `Report_${y}_${m}.csv`); toast("ดาวน์โหลดสำเร็จ", "success"); }
+}
+
+function downloadCSV(data, fileName) {
+  if (!data || data.length === 0) return;
+  const headers = Object.keys(data[0]).join(",");
+  const rows = data.map(obj => Object.values(obj).map(v => `"${String(v||"").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob(["\uFEFF" + headers + "\n" + rows], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a"); link.href = url; link.download = fileName; link.click();
+}
+
+function openEmailModal(id) {
+  const r = id ? App.requests.find(x=>x.id==id) : App.currentReq; if (!r) return;
+  App.currentReq = r;
+  document.getElementById("em-to").value = r.requesterEmail;
+  document.getElementById("em-subject").value = `[HosXP Report] ${r.requestNo}`;
+  document.getElementById("email-form-wrap").style.display = "block";
+  document.getElementById("email-sent-anim").style.display = "none";
+  closeModal("modal-detail"); openModal("modal-email");
+}
+
+async function sendEmail() {
+  const res = await GS.call("sendReportEmail", { ...App.currentReq, to: document.getElementById("em-to").value }, App.user.username);
+  if (res.success) { 
+    document.getElementById("email-form-wrap").style.display = "none";
+    document.getElementById("email-sent-anim").style.display = "block";
+  }
+}
+
+async function loadLogs() {
+  const tbody = document.getElementById("logs-tbody");
+  if(tbody) tbody.innerHTML = `<tr><td>${new Date().toLocaleString("th-TH")}</td><td>system</td><td>REFRESH</td><td>เรียกดูบันทึกกิจกรรม</td></tr>`;
+}
+
+// ============================================================
+//  13. SYSTEM INITIALIZATION & EVENT SAFETY BINDING
+// ============================================================
+document.addEventListener("DOMContentLoaded", () => {
+  setTimeout(() => {
+    const loadScreen = document.getElementById("app-loading");
+    if (loadScreen) {
+      loadScreen.style.opacity = "0";
+      setTimeout(() => { loadScreen.style.display = "none"; document.getElementById("login-screen").style.display = "flex"; }, 400);
+    }
+  }, 1000);
+
+  function safeEvent(id, type, cb) { const el = document.getElementById(id); if (el) el.addEventListener(type, cb); }
+
+  // ผูกตัวดักเหตุการณ์หน้าล็อกอิน
+  safeEvent("login-btn", "click", doLogin);
+  safeEvent("logout-btn", "click", logout);
+  safeEvent("refresh-btn", "click", loadRequests);
+  safeEvent("edit-save-btn", "click", saveEdit);
+  safeEvent("pdf-download-btn", "click", downloadPdf);
+  safeEvent("email-send-btn", "click", sendEmail);
+  safeEvent("delete-confirm-btn", "click", doDelete);
+  safeEvent("nr-submit-btn", "click", submitNewRequest);
+  safeEvent("nr-reset-btn", "click", resetNewRequest);
+  safeEvent("nr-new-btn", "click", () => { resetNewRequest(); });
+  safeEvent("logs-refresh-btn", "click", loadLogs);
+  safeEvent("btn-download-csv", "click", downloadMonthlyReport);
+  safeEvent("search-input", "input", e => { App.searchQuery = e.target.value; renderTable(); });
+  safeEvent("filter-status", "change", e => { App.filterStatus = e.target.value; renderTable(); });
+  safeEvent("filter-dept", "change", e => { App.filterDept = e.target.value; renderTable(); });
+
+  // ผูกตัวดักเหตุการณ์หน้าแสดงรายละเอียด (Detail Modal)
+  safeEvent("detail-pdf-btn", "click", () => openPdfModal(null));
+  safeEvent("detail-edit-btn", "click", () => openEditModal(null));
+  safeEvent("detail-email-btn", "click", () => openEmailModal(null));
+  safeEvent("detail-ai-btn", "click", analyzeRequestWithAI);
+
+  // ผูกตัวดักเหตุการณ์หน้าจัดการตั้งค่าส่วนตัว
+  safeEvent("set-save-btn", "click", saveSettings);
+  safeEvent("btn-test-line-personal", "click", testPersonalLine);
+  safeEvent("btn-test-tg-personal", "click", testPersonalTelegram);
+
+  safeEvent("btn-test-line", "click", async () => {
+    toast("กำลังส่งข้อความทดสอบ...", "info");
+    const res = await GS.call("testLineNotification");
+    if (res.success) toast(res.message, "success");
+  });
+
+  try {
+    const su = localStorage.getItem("hosxp_username"); const sp = localStorage.getItem("hosxp_password");
+    if (su && sp) {
+      document.getElementById("login-username").value = su; document.getElementById("login-password").value = sp;
+      document.getElementById("login-remember").checked = true;
+    }
+  } catch(e){}
+
+  const togglePass = document.getElementById("toggle-password");
+  const passInp = document.getElementById("login-password");
+  if (togglePass && passInp) {
+    togglePass.addEventListener("click", () => {
+      const isPass = passInp.type === "password";
+      passInp.type = isPass ? "text" : "password";
+      togglePass.textContent = isPass ? "👁️" : "👁️‍🗨️";
+    });
+  }
+
+  const sidebar = document.querySelector(".sidebar");
+  const sidebarOverlay = document.getElementById("sidebar-overlay");
+
+  function openSidebar() {
+    if (sidebar) sidebar.classList.add("active");
+    if (sidebarOverlay) sidebarOverlay.classList.add("active");
+  }
+
+  function closeSidebar() {
+    if (sidebar) sidebar.classList.remove("active");
+    if (sidebarOverlay) sidebarOverlay.classList.remove("active");
+  }
+
+  safeEvent("sidebar-toggle", "click", openSidebar);
+  safeEvent("sidebar-close", "click", closeSidebar);
+  safeEvent("sidebar-overlay", "click", closeSidebar);
+
+  document.querySelectorAll(".nav-item[data-page]").forEach(el => {
+    el.addEventListener("click", () => {
+      navigate(el.dataset.page);
+      closeSidebar();
+    });
+  });
+
+  const topbarBtn = document.getElementById("topbar-new-btn");
+  if (topbarBtn) topbarBtn.addEventListener("click", () => navigate("new-request"));
+
+  document.querySelectorAll(".stat-card").forEach(card => {
+    card.addEventListener("click", () => {
+      if (document.getElementById("page-dashboard").classList.contains("active")) {
+        dashboardFilter = (dashboardFilter === card.dataset.filter) ? "" : card.dataset.filter;
+        loadDashboard();
+      } else {
+        App.filterStatus = card.dataset.filter;
+        if(document.getElementById("filter-status")) document.getElementById("filter-status").value = card.dataset.filter;
+        navigate("requests");
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-close]").forEach(btn => {
+    btn.addEventListener("click", () => closeModal(btn.dataset.close));
+  });
+
+  // ผูกตัวดักเหตุการณ์ระบบแชทอัจฉริยะ AI Chatbot
+  safeEvent("ai-chat-toggle", "click", toggleChatPanel);
+  safeEvent("ai-chat-close", "click", toggleChatPanel);
+  safeEvent("ai-chat-send", "click", sendChatMessage);
+  const chatInput = document.getElementById("ai-chat-input");
+  if (chatInput) {
+    chatInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
+  }
+
+  // เรียกใช้ตัวเก็บรวบรวมสถานะความสมบูรณ์ของแบบฟอร์ม
+  try {
+    initFormAutoProgress();
+  } catch (e) {
+    console.error("Failed to initialize auto-progress for form", e);
+  }
+});
+</script>

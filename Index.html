@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HosXP Report</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Outfit:wght@300;400;500;600;700;800&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<?!= include('Style'); ?>
+</head>
+<body>
+
+<div id="app-loading">
+  <div class="spinner"></div>
+  <div class="logo-text">🏥 HosXP Report</div>
+  <div class="sub">กำลังโหลดระบบ...</div>
+</div>
+
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-icon">🏥</div>
+    <h1>ระบบขอรายงาน HosXP</h1>
+    <p>เข้าสู่ระบบเพื่อดำเนินการขอรายงาน</p>
+    
+    <div class="form-group">
+      <label>ชื่อผู้ใช้</label>
+      <input type="text" id="login-username" placeholder="กรอกชื่อผู้ใช้" autocomplete="username">
+    </div>
+    
+    <div class="form-group">
+      <label>รหัสผ่าน</label>
+      <div style="position: relative; display: flex; align-items: center;">
+        <input type="password" id="login-password" placeholder="กรอกรหัสผ่าน" autocomplete="current-password" style="padding-right: 40px; width: 100%;">
+        <span id="toggle-password" style="position: absolute; right: 12px; cursor: pointer; user-select: none; font-size: 16px; color: var(--gray-600);">👁️</span>
+      </div>
+    </div>
+
+    <div class="form-group" style="display: flex; align-items: center; gap: 8px; margin-top: 12px; margin-bottom: 12px;">
+      <input type="checkbox" id="login-remember" style="width: auto; cursor: pointer;">
+      <label for="login-remember" style="margin-bottom: 0; font-weight: 500; color: var(--gray-600); cursor: pointer; font-size: 13px;">จำชื่อผู้ใช้และรหัสผ่านในเครื่องนี้</label>
+    </div>
+    
+    <div id="login-error">⚠️ ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง</div>
+    
+    <button class="btn btn-primary btn-block" id="login-btn" style="margin-top:16px">
+      <span id="login-btn-text">เข้าสู่ระบบ</span>
+    </button>
+
+    <div style="margin-top: 20px; padding: 12px; background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: var(--radius-sm); color: var(--gray-600); text-align: center; font-size: 12px; font-weight: 500;">
+      💡 *ใช้เลขบัตรประชาชนของท่านเองเพื่อเข้าระบบ
+    </div>
+  </div>
+</div>
+
+<div id="app-shell">
+  <div id="sidebar-overlay"></div>
+  <aside class="sidebar">
+    <div class="sidebar-header" style="display: flex; align-items: center; justify-content: space-between;">
+      <div>
+        <div class="sidebar-logo">🏥 <span>HosXP</span> Report</div>
+        <div class="sidebar-sub">ระบบขอรายงาน</div>
+      </div>
+      <button class="close-btn" id="sidebar-close" style="display: none; background: rgba(255, 255, 255, 0.15); color: #fff; border: none; border-radius: 50%; width: 32px; height: 32px; align-items: center; justify-content: center; font-size: 14px; cursor: pointer; transition: var(--transition);">✕</button>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">หลัก</div>
+      <div class="nav-item active" data-page="dashboard">
+        <span class="nav-icon">📊</span> แดชบอร์ด
+      </div>
+      <div class="nav-item" data-page="requests" style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <span class="nav-icon">📋</span> คำขอรายงาน
+        </div>
+        <span id="nav-badge-pending" class="badge badge-pending" style="display: none; padding: 2px 8px; font-size: 11px;">0</span>
+      </div>
+      <div class="nav-section">เครื่องมือ</div>
+      <div class="nav-item" data-page="new-request">
+        <span class="nav-icon">➕</span> สร้างคำขอใหม่
+      </div>
+      <div class="nav-item" data-page="settings">
+        <span class="nav-icon">⚙️</span> จัดการโปรไฟล์ส่วนตัว
+      </div>
+      <div class="nav-section admin-only">การจัดการระบบ</div>
+      <div class="nav-item admin-only" data-page="users">
+        <span class="nav-icon">👥</span> จัดการผู้ใช้
+      </div>
+      <div class="nav-item admin-only" id="btn-test-line">
+        <span class="nav-icon">🔔</span> ทดสอบ LINE
+      </div>
+      <div class="nav-item admin-only" data-page="logs" style="display:none">
+        <span class="nav-icon">📜</span> บันทึกกิจกรรม
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-info" onclick="navigate('settings')" title="จัดการโปรไฟล์ส่วนตัว">
+        <div class="user-avatar" id="user-avatar">👤</div>
+        <div>
+          <div class="user-name" id="sidebar-username">-</div>
+          <div class="user-role" id="sidebar-role">-</div>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-sm btn-block" id="logout-btn">ออกจากระบบ</button>
+    </div>
+  </aside>
+
+  <div class="main-content">
+    <header class="topbar">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <button class="btn btn-icon btn-secondary" id="sidebar-toggle" style="display: none; width: 40px; height: 40px; border-radius: 50%; font-size: 20px; align-items: center; justify-content: center; padding: 0; min-height: auto;">
+          ☰
+        </button>
+        <div class="page-title" id="page-title">แดชบอร์ด</div>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn btn-primary btn-sm" id="topbar-new-btn">
+          ➕ สร้างคำขอใหม่
+        </button>
+      </div>
+    </header>
+
+    <main class="content-area">
+
+      <div class="page active" id="page-dashboard">
+        <div class="stats-grid" id="stats-grid">
+          <div class="stat-card blue"    data-filter="">  <div class="stat-icon">📦</div><div class="stat-value" id="stat-total">0</div><div class="stat-label">คำขอทั้งหมด</div></div>
+          <div class="stat-card yellow"  data-filter="รอดำเนินการ"> <div class="stat-icon">⏳</div><div class="stat-value" id="stat-pending">0</div><div class="stat-label">รอดำเนินการ</div></div>
+          <div class="stat-card blue"    data-filter="กำลังดำเนินการ"><div class="stat-icon">⚙️</div><div class="stat-value" id="stat-processing">0</div><div class="stat-label">กำลังดำเนินการ</div></div>
+          <div class="stat-card green"   data-filter="เสร็จสิ้น">  <div class="stat-icon">✅</div><div class="stat-value" id="stat-done">0</div><div class="stat-label">เสร็จสิ้น</div></div>
+          <div class="stat-card red"     data-filter="ปฏิเสธ">    <div class="stat-icon">❌</div><div class="stat-value" id="stat-rejected">0</div><div class="stat-label">ปฏิเสธ</div></div>
+        </div>
+
+        <div class="progress-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h3 style="margin-bottom: 0;">สัดส่วนสถานะคำขอ</h3>
+            <div id="dashboard-filter-info" style="font-size: 13px; font-weight: 600; color: var(--primary-dark); display: none;">
+              📍 กำลังกรอง: <span id="current-dashboard-filter"></span> 
+              <span style="cursor: pointer; color: var(--red); margin-left: 8px;" onclick="resetDashboardFilter()">✕ ล้าง</span>
+            </div>
+          </div>
+          <div class="progress-bar-wrap" id="progress-bar">
+            <div class="progress-seg" style="background:#f9ab00;width:0%" data-key="รอดำเนินการ"></div>
+            <div class="progress-seg" style="background:#4285f4;width:0%" data-key="กำลังดำเนินการ"></div>
+            <div class="progress-seg" style="background:#1e8e3e;width:0%" data-key="เสร็จสิ้น"></div>
+            <div class="progress-seg" style="background:#d93025;width:0%" data-key="ปฏิเสธ"></div>
+          </div>
+          <div class="progress-legend">
+            <div class="legend-item"><div class="legend-dot" style="background:#f9ab00"></div>รอดำเนินการ</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#4285f4"></div>กำลังดำเนินการ</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#1e8e3e"></div>เสร็จสิ้น</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#d93025"></div>ปฏิเสธ</div>
+          </div>
+        </div>
+
+        <div class="recent-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid rgba(0, 0, 0, 0.05); padding-bottom: 12px;">
+            <h3 style="margin-bottom: 0; border-bottom: none; padding-bottom: 0;">รายการล่าสุด (10 รายการ)</h3>
+            <button class="btn btn-secondary btn-sm" onclick="loadDashboard()" style="min-height: auto; padding: 4px 10px;">🔄 รีเฟรช</button>
+          </div>
+          <div id="recent-list"></div>
+        </div>
+      </div>
+
+      <div class="page" id="page-requests">
+        <div class="table-card">
+          <div class="table-toolbar">
+            <div class="report-controls" style="display: flex; gap: 10px; align-items: center; background: #fff; padding: 16px; border-radius: var(--radius); box-shadow: var(--shadow-sm); margin-bottom: 20px;">
+              <span style="font-size: 13px; font-weight: 600; color: var(--gray-600);">สรุปรายงาน:</span>
+              
+              <select id="rep-month" class="filter-select">
+                <option value="1">มกราคม</option>
+                <option value="2">กุมภาพันธ์</option>
+                <option value="3">มีนาคม</option>
+                <option value="4">เมษายน</option>
+                <option value="5">พฤษภาคม</option>
+                <option value="6" selected>มิถุนายน</option>
+                <option value="7">กรกฎาคม</option>
+                <option value="8">สิงหาคม</option>
+                <option value="9">กันยายน</option>
+                <option value="10">ตุลาคม</option>
+                <option value="11">พฤศจิกายน</option>
+                <option value="12">ธันวาคม</option>
+              </select>
+
+              <select id="rep-year" class="filter-select">
+                <option value="2024">2024</option>
+                <option value="2025">2025</option>
+                <option value="2026" selected>2026</option>
+              </select>
+
+              <button class="btn btn-primary" id="btn-download-csv">
+                📊 ดึงรายงาน
+              </button>
+            </div>
+            
+            <div class="search-box">
+              🔍
+              <input type="text" id="search-input" placeholder="ค้นหาชื่อ, เลขที่คำขอ, แผนก...">
+            </div>
+            <select class="filter-select" id="filter-status">
+              <option value="">ทุกสถานะ</option>
+              <option>รอดำเนินการ</option>
+              <option>กำลังดำเนินการ</option>
+              <option>เสร็จสิ้น</option>
+              <option>ปฏิเสธ</option>
+            </select>
+            <select class="filter-select" id="filter-dept">
+              <option value="">ทุกแผนก</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" id="refresh-btn">🔄 รีเฟรช</button>
+          </div>
+          <div class="table-wrap">
+            <table id="requests-table">
+              <thead>
+                <tr>
+                  <th>เลขที่คำขอ</th>
+                  <th>ผู้ขอ</th>
+                  <th>แผนก</th>
+                  <th>ประเภทรายงาน</th>
+                  <th>ความเร่งด่วน</th>
+                  <th>สถานะ</th>
+                  <th>วันที่สร้าง</th>
+                  <th>การดำเนินการ</th>
+                </tr>
+              </thead>
+              <tbody id="requests-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="page" id="page-new-request">
+        <div class="table-card" style="max-width:720px; margin:0 auto;">
+          <div class="modal-header" style="border-radius:var(--radius) var(--radius) 0 0">
+            <h2>📋 สร้างคำขอรายงานใหม่</h2>
+          </div>
+          <div class="modal-body">
+            
+            <!-- Step Indicator -->
+            <div class="steps" style="margin-bottom: 24px;">
+              <div class="step-item active" id="step1-indicator"><div class="step-num">1</div> ข้อมูลผู้ขอ</div>
+              <div class="step-connector"></div>
+              <div class="step-item" id="step2-indicator"><div class="step-num">2</div> รายละเอียดรายงาน</div>
+              <div class="step-connector"></div>
+              <div class="step-item" id="step3-indicator"><div class="step-num">3</div> ส่งคำขอ</div>
+            </div>
+
+            <div id="new-req-form">
+              <!-- Section 1: ข้อมูลผู้ขอรายงาน -->
+              <div class="card" style="border:1px solid var(--gray-200); border-radius:var(--radius); padding:20px; margin-bottom:20px;">
+                <div class="section-label" style="font-size:11px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase; color:var(--green-600); margin-bottom:12px;">ข้อมูลผู้ขอรายงาน (ส่วนที่ 1)</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="nr-name">ชื่อ-นามสกุล <span class="req" style="color:var(--red);">*</span></label>
+                    <input type="text" id="nr-name" placeholder="นาย/นาง/นางสาว ชื่อ นามสกุล" />
+                  </div>
+                  <div class="form-group">
+                    <label for="nr-dept">แผนก / ฝ่าย <span class="req" style="color:var(--red);">*</span></label>
+                    <select id="nr-dept">
+                      <option value="">-- เลือกแผนก/งาน --</option>
+                      <option value="กลุ่มงานการพยาบาล">กลุ่มงานการพยาบาล</option>
+                      <option value="กายภาพบำบัด">กายภาพบำบัด</option>
+                      <option value="การเงิน">การเงิน</option>
+                      <option value="งานบริการปฐมภูมิ">งานบริการปฐมภูมิ</option>
+                      <option value="งานบริหารทั่วไป">งานบริหารทั่วไป</option>
+                      <option value="งานพัสดุ">งานพัสดุ</option>
+                      <option value="งานสุขภาพจิต">งานสุขภาพจิต</option>
+                      <option value="งานโภชนาการ">งานโภชนาการ</option>
+                      <option value="จ่ายกลาง">จ่ายกลาง</option>
+                      <option value="ชันสูตร">ชันสูตร</option>
+                      <option value="ซักฟอก">ซักฟอก</option>
+                      <option value="ซ่อมบำรุง">ซ่อมบำรุง</option>
+                      <option value="ทันตกรรม">ทันตกรรม</option>
+                      <option value="ธุรการ">ธุรการ</option>
+                      <option value="บ้านพักแพทย์">บ้านพักแพทย์</option>
+                      <option value="ประกันสุขภาพ">ประกันสุขภาพ</option>
+                      <option value="ผู้ป่วยนอก">ผู้ป่วยนอก</option>
+                      <option value="ผู้ป่วยใน">ผู้ป่วยใน</option>
+                      <option value="พ.บริการคลินิกพิเศษ">พ.บริการคลินิกพิเศษ</option>
+                      <option value="ยานพาหนะ">ยานพาหนะ</option>
+                      <option value="สารสนเทศ">สารสนเทศ</option>
+                      <option value="ห้องคลอด">ห้องคลอด</option>
+                      <option value="ห้องบัตร">ห้องบัตร</option>
+                      <option value="ห้องเก็บเงิน">ห้องเก็บเงิน</option>
+                      <option value="อุบัติเหตุและฉุกเฉิน">อุบัติเหตุและฉุกเฉิน</option>
+                      <option value="เภสัชกรรม">เภสัชกรรม</option>
+                      <option value="เอ็กซเรย์">เอ็กซเรย์</option>
+                      <option value="แพทย์">แพทย์</option>
+                      <option value="แพทย์แผนไทย">แพทย์แผนไทย</option>
+                      <option value="แม่บ้าน">แม่บ้าน</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="nr-phone">เบอร์โทรภายใน</label>
+                    <input type="text" id="nr-phone" placeholder="เช่น 1234" />
+                  </div>
+                  <div class="form-group">
+                    <label for="nr-email">อีเมล <span class="req" style="color:var(--red);">*</span></label>
+                    <input type="email" id="nr-email" placeholder="example@hospital.go.th" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- Section 2: รายละเอียดรายงานที่ต้องการ -->
+              <div class="card" style="border:1px solid var(--gray-200); border-radius:var(--radius); padding:20px; margin-bottom:20px;">
+                <div class="section-label" style="font-size:11px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase; color:var(--green-600); margin-bottom:12px;">รายละเอียดรายงานที่ต้องการ (ส่วนที่ 2)</div>
+
+                <div class="form-group">
+                  <label for="nr-type">ชื่อรายงาน / หัวข้อที่ขอ <span class="req" style="color:var(--red);">*</span></label>
+                  <input type="text" id="nr-type" placeholder="เช่น รายงานสรุปผู้ป่วยนอก รายเดือน" />
+                </div>
+
+                <div class="form-group">
+                  <label for="nr-purpose">วัตถุประสงค์การใช้งาน <span class="req" style="color:var(--red);">*</span></label>
+                  <textarea id="nr-purpose" placeholder="อธิบายว่าจะนำรายงานนี้ไปใช้ทำอะไร เช่น นำเสนอผู้บริหาร, ส่ง สสจ., ใช้วางแผนงาน..."></textarea>
+                </div>
+
+                <div class="divider"></div>
+
+                <div class="form-group">
+                  <label>ประเภทข้อมูลที่ต้องการ</label>
+                  <div class="chip-group" id="nr-dataTypeGroup">
+                    <div class="chip" onclick="toggleChip(this)">ผู้ป่วยนอก (OPD)</div>
+                    <div class="chip" onclick="toggleChip(this)">ผู้ป่วยใน (IPD)</div>
+                    <div class="chip" onclick="toggleChip(this)">งานส่งเสริมสุขภาพ</div>
+                    <div class="chip" onclick="toggleChip(this)">งานห้องปฏิบัติการ</div>
+                    <div class="chip" onclick="toggleChip(this)">งานเภสัช</div>
+                    <div class="chip" onclick="toggleChip(this)">งานรังสีวิทยา</div>
+                    <div class="chip" onclick="toggleChip(this)">งานการเงิน</div>
+                    <div class="chip" onclick="toggleChip(this)">ข้อมูลบุคลากร</div>
+                    <div class="chip" onclick="toggleChip(this)">อื่นๆ</div>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="nr-from">วันที่เริ่มต้นข้อมูล <span class="req" style="color:var(--red);">*</span></label>
+                    <input type="date" id="nr-from" />
+                  </div>
+                  <div class="form-group">
+                    <label for="nr-to">วันที่สิ้นสุดข้อมูล <span class="req" style="color:var(--red);">*</span></label>
+                    <input type="date" id="nr-to" />
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="nr-fields">Fields / คอลัมน์ที่ต้องการ</label>
+                  <textarea id="nr-fields" style="min-height:70px"
+                    placeholder="เช่น HN, ชื่อ-นามสกุล, วันเกิด, เพศ, วินิจฉัยโรค (ICD10), แพทย์ผู้รักษา, วันที่รับบริการ..."></textarea>
+                </div>
+
+                <div class="form-group">
+                  <label for="nr-filter">เงื่อนไขการกรองข้อมูล (Filter)</label>
+                  <textarea id="nr-filter" style="min-height:70px"
+                    placeholder="เช่น เฉพาะผู้ป่วยสิทธิ์ UC, เฉพาะแผนก OPD อายุรกรรม, เฉพาะโรค Diabetes (E11)..."></textarea>
+                </div>
+              </div>
+
+              <!-- Section 3: รูปแบบและความเร่งด่วน -->
+              <div class="card" style="border:1px solid var(--gray-200); border-radius:var(--radius); padding:20px; margin-bottom:20px;">
+                <div class="section-label" style="font-size:11px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase; color:var(--green-600); margin-bottom:12px;">รูปแบบและความเร่งด่วน (ส่วนที่ 3)</div>
+
+                <div class="form-group">
+                  <label>รูปแบบไฟล์ที่ต้องการ</label>
+                  <div class="chip-group" id="nr-formatGroup">
+                    <div class="chip" onclick="toggleChip(this)">Excel (.xlsx)</div>
+                    <div class="chip" onclick="toggleChip(this)">CSV</div>
+                    <div class="chip" onclick="toggleChip(this)">PDF</div>
+                    <div class="chip" onclick="toggleChip(this)">Google Sheet</div>
+                    <div class="chip" onclick="toggleChip(this)">แสดงบนหน้าจอ</div>
+                  </div>
+                </div>
+
+                <div class="form-group" style="margin-top:14px">
+                  <label>ระดับความเร่งด่วน <span class="req" style="color:var(--red);">*</span></label>
+                  <div class="priority-grid">
+                    <div class="priority-card sel-low" id="nr-p-low" onclick="setFormPriority('ปกติ')">
+                      <div class="p-icon">🟢</div>
+                      <div class="p-name">ปกติ</div>
+                      <div class="p-desc">ภายใน 3–5 วัน</div>
+                    </div>
+                    <div class="priority-card" id="nr-p-normal" onclick="setFormPriority('สูง')">
+                      <div class="p-icon">🔵</div>
+                      <div class="p-name">เร่งด่วน</div>
+                      <div class="p-desc">ภายใน 1–2 วัน</div>
+                    </div>
+                    <div class="priority-card" id="nr-p-urgent" onclick="setFormPriority('เร่งด่วน')">
+                      <div class="p-icon">🔴</div>
+                      <div class="p-name">ด่วนมาก</div>
+                      <div class="p-desc">ภายในวันนี้</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="nr-needDate">วันที่ต้องการรับรายงาน</label>
+                  <input type="date" id="nr-needDate" />
+                </div>
+
+                <div class="form-group">
+                  <label for="nr-note">หมายเหตุ / ข้อมูลเพิ่มเติม</label>
+                  <textarea id="nr-note" placeholder="ข้อมูลอื่นๆ ที่อยากให้ทีม IT ทราบ เช่น ตัวอย่างรายงานแนบ, ชื่อรายงานเดิมที่เคยขอ..."></textarea>
+                </div>
+              </div>
+
+              <!-- Info Note -->
+              <div class="info-note">
+                ระบบจะบันทึกคำขอลง Google Sheet และส่งอีเมลแจ้งทีม IT โดยอัตโนมัติ
+                ท่านจะได้รับ <strong>Ticket ID</strong> ยืนยันทางอีเมลที่ระบุไว้
+              </div>
+
+              <div style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" id="nr-reset-btn">ล้างข้อมูล</button>
+                <button class="btn btn-primary" id="nr-submit-btn">📤 ส่งคำขอรายงาน</button>
+              </div>
+            </div>
+
+            <div id="nr-success" style="display:none;text-align:center;padding:32px">
+              <div style="font-size:56px;animation:bounceIn .5s cubic-bezier(.34,1.56,.64,1)">🎉</div>
+              <h3 style="font-size:18px;margin:12px 0 6px">ส่งคำขอสำเร็จ!</h3>
+              <p style="color:var(--gray-600);font-size:14px;line-height:1.8" id="nr-success-msg"></p>
+              <button class="btn btn-primary" style="margin-top:20px" id="nr-new-btn">สร้างคำขอใหม่</button>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="page" id="page-logs">
+        <div class="table-card">
+          <div class="table-toolbar">
+            <strong style="font-size:14px">📜 บันทึกกิจกรรมระบบ</strong>
+            <button class="btn btn-secondary btn-sm" id="logs-refresh-btn">🔄 รีเฟรช</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>เวลา</th><th>ผู้ใช้</th><th>การกระทำ</th><th>รายละเอียด</th></tr></thead>
+              <tbody id="logs-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="page" id="page-users">
+        <div class="table-card">
+          <div class="table-toolbar">
+            <strong>👥 รายชื่อผู้ใช้ในระบบ</strong>
+            <button class="btn btn-primary btn-sm" onclick="openUserModal()">➕ เพิ่มผู้ใช้</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>ชื่อที่แสดง</th>
+                  <th>แผนก</th>
+                  <th>สิทธิ์</th>
+                  <th>การจัดการ</th>
+                </tr>
+              </thead>
+              <tbody id="users-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Page Settings -->
+      <div class="page" id="page-settings">
+        <div class="table-card" style="max-width: 600px; margin: 0 auto; padding: 28px;">
+          <div class="modal-header" style="border-radius: var(--radius) var(--radius) 0 0; padding: 0 0 20px 0; margin-bottom: 24px;">
+            <h2>⚙️ จัดการโปรไฟล์ & ตั้งค่าแจ้งเตือน</h2>
+          </div>
+          <div class="modal-body" style="padding: 0;">
+            <div class="card" style="margin-bottom: 20px;">
+              <div class="section-label" style="color: var(--primary-dark);">ข้อมูลบัญชีผู้ใช้</div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>ชื่อผู้ใช้งาน (ล็อกไว้)</label>
+                  <input type="text" id="set-username" readonly style="background: rgba(0,0,0,0.03); cursor: not-allowed;">
+                </div>
+                <div class="form-group">
+                  <label>รหัสผ่าน</label>
+                  <input type="password" id="set-password" placeholder="เปลี่ยนรหัสผ่านใหม่">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>ชื่อที่แสดง</label>
+                  <input type="text" id="set-display" placeholder="ชื่อ-นามสกุล">
+                </div>
+                <div class="form-group">
+                  <label>อีเมล</label>
+                  <input type="text" id="set-email" placeholder="example@hospital.go.th">
+                </div>
+              </div>
+              <div class="form-group">
+                <label>แผนก / งาน</label>
+                <input type="text" id="set-dept" placeholder="ระบุแผนกของคุณ">
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 24px;">
+              <div class="section-label" style="color: var(--primary-dark);">ช่องทางแจ้งเตือนอัจฉริยะ (LINE & Telegram)</div>
+              
+              <!-- LINE Settings -->
+              <div class="form-group">
+                <label style="color: var(--green); display: flex; align-items: center; gap: 6px;">
+                  🟢 LINE User ID / Group ID
+                </label>
+                <input type="text" id="set-lineid" placeholder="กรอก LINE User ID ของคุณ">
+                <small style="color: var(--gray-600); font-size: 11px; display: block; margin-top: 4px;">
+                  * พิมพ์ <b>@id</b> หาบอท หรือเชิญบอทเข้ากลุ่มเพื่อนำ Group ID มากรอกที่นี่เพื่อรับแจ้งเตือนกลุ่ม
+                </small>
+              </div>
+
+              <!-- Telegram Settings -->
+              <div class="form-group" style="margin-top: 16px;">
+                <label style="color: #229ED9; display: flex; align-items: center; gap: 6px;">
+                  🔵 Telegram Chat ID
+                </label>
+                <input type="text" id="set-telegramid" placeholder="กรอก Telegram Chat ID ของคุณ เช่น 123456789">
+                <div style="background: rgba(0,0,0,0.02); border: 1px solid var(--gray-200); border-radius: 8px; padding: 12px; margin-top: 8px; font-size: 12px; color: var(--gray-600); line-height: 1.6;">
+                  <b>💡 ขั้นตอนการรับแจ้งเตือนผ่าน Telegram:</b><br>
+                  1. ค้นหาบอท <b>@HosxpReportBot</b> ใน Telegram หรือสแกนเพื่อเริ่มใช้งาน<br>
+                  2. กดปุ่ม <b>/start</b> หรือพิมพ์คุยกับบอท เพื่อเปิดการใช้งานบอท<br>
+                  3. ค้นหา Chat ID ของคุณโดยคุยกับบอท <b>@userinfobot</b> แล้วคัดลอกตัวเลข Chat ID มาใส่ในช่องด้านบน
+                </div>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 12px; justify-content: flex-end; align-items: center; flex-wrap: wrap;">
+              <button class="btn btn-secondary btn-sm" id="btn-test-line-personal" style="border-color: var(--green); color: var(--green); min-height: auto;">
+                🟢 ทดสอบ LINE
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btn-test-tg-personal" style="border-color: #229ED9; color: #229ED9; min-height: auto;">
+                🔵 ทดสอบ Telegram
+              </button>
+              <button class="btn btn-primary" id="set-save-btn">
+                💾 บันทึกตั้งค่า
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+    <footer style="padding: 20px 32px; text-align: center; font-size: 13px; color: var(--gray-400); border-top: 1px solid rgba(0,0,0,0.05); background: rgba(255,255,255,0.3); backdrop-filter: blur(10px);">
+      <div>© 2026 ระบบขอรายงาน HosXP V.2 | พัฒนาโดย <strong>Kittipun</strong></div>
+      <div style="font-size: 11px; margin-top: 4px; opacity: 0.8;">โรงพยาบาลคลองหาด จ.สระแก้ว</div>
+    </footer>
+
+    <!-- Floating AI Chatbot Widget (แสดงเฉพาะเมื่อล็อกอินแล้ว) -->
+    <div id="ai-chat-widget">
+      <button id="ai-chat-toggle" title="คุยกับ AI ผู้ช่วย">🤖</button>
+      
+      <div id="ai-chat-panel" style="display: none;">
+        <div class="chat-header">
+          <div class="chat-header-main">
+            <div class="chat-header-title">🤖 AI Assistant</div>
+            <button id="ai-chat-close">✕</button>
+          </div>
+          <div id="ai-chat-role" class="chat-role-badge">User Mode</div>
+        </div>
+        <div id="ai-chat-messages">
+          <div class="chat-message model">มีข้อสงสัยเกี่ยวกับตารางข้อมูล HOSxP หรือตัวอย่างคำสั่ง SQL ดึงข้อมูลหรือไม่? สอบถามผมได้เลยครับ!</div>
+        </div>
+        <div class="chat-input-area">
+          <input type="text" id="ai-chat-input" placeholder="ถามข้อมูล HOSxP ที่นี่..." autocomplete="off">
+          <button id="ai-chat-send" title="ส่งข้อความ">📤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-detail">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <h2>📄 รายละเอียดคำขอ</h2>
+      <button class="close-btn" data-close="modal-detail">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="detail-grid" id="detail-content"></div>
+      
+      <!-- AI Analysis & SQL Helper Section -->
+      <div id="detail-ai-section" style="display: none; margin-top: 24px; border-top: 2px dashed var(--gray-200); padding-top: 20px;">
+        <h4 style="display: flex; align-items: center; gap: 8px; color: var(--primary-dark); font-size: 14.5px; margin-bottom: 12px; font-weight: 700;">
+          🤖 ผลการวิเคราะห์และแนะนำ SQL โดย Gemini AI
+        </h4>
+        <div id="detail-ai-result" style="background: var(--gray-50); border: 1.5px solid var(--gray-200); border-radius: var(--radius-sm); padding: 16px; font-size: 14px; line-height: 1.6; position: relative; color: var(--gray-800); overflow: hidden;">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="detail-ai-btn" style="border-color: var(--primary); color: var(--primary-dark); font-weight: 700;">🤖 วิเคราะห์ด้วย AI</button>
+      <button class="btn btn-secondary" id="detail-email-btn">✉️ ส่งอีเมล</button>
+      <button class="btn btn-secondary" id="detail-pdf-btn">📄 ดู PDF</button>
+      <button class="btn btn-primary admin-only" id="detail-edit-btn" style="display:none">✏️ แก้ไข</button>
+      <button class="close-btn-txt btn btn-secondary" data-close="modal-detail">ปิด</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-edit">
+  <div class="modal modal-md">
+    <div class="modal-header">
+      <h2>✏️ แก้ไขคำขอ</h2>
+      <button class="close-btn" data-close="modal-edit">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label>ชื่อผู้ขอ</label><input type="text" id="ed-name"></div>
+        <div class="form-group"><label>อีเมล</label><input type="email" id="ed-email"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>แผนก</label><input type="text" id="ed-dept"></div>
+        <div class="form-group"><label>ชื่อรายงาน / หัวข้อ</label><input type="text" id="ed-type"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>เบอร์โทรภายใน</label><input type="text" id="ed-phone"></div>
+        <div class="form-group"><label>วันที่ต้องการรับรายงาน</label><input type="date" id="ed-needDate"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>วันที่เริ่มต้น</label><input type="date" id="ed-from"></div>
+        <div class="form-group"><label>วันที่สิ้นสุด</label><input type="date" id="ed-to"></div>
+      </div>
+      <div class="form-group">
+        <label>ประเภทข้อมูลที่ต้องการ (แยกด้วยจุลภาค ,)</label>
+        <input type="text" id="ed-dataType" placeholder="เช่น ผู้ป่วยนอก (OPD), ผู้ป่วยใน (IPD)">
+      </div>
+      <div class="form-group">
+        <label>รูปแบบไฟล์ที่ต้องการ (แยกด้วยจุลภาค ,)</label>
+        <input type="text" id="ed-format" placeholder="เช่น Excel, PDF">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>ความเร่งด่วน</label>
+          <select id="ed-urgency">
+            <option value="ปกติ">ปกติ</option>
+            <option value="สูง">สูง</option>
+            <option value="เร่งด่วน">เร่งด่วน</option>
+          </select>
+        </div>
+        <div class="form-group admin-only" id="ed-status-grp" style="display:none">
+          <label>สถานะ (Admin)</label>
+          <select id="ed-status">
+            <option>รอดำเนินการ</option>
+            <option>กำลังดำเนินการ</option>
+            <option>เสร็จสิ้น</option>
+            <option>ปฏิเสธ</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group"><label>วัตถุประสงค์</label><textarea id="ed-purpose"></textarea></div>
+      <div class="form-group"><label>Fields / คอลัมน์ที่ต้องการ</label><textarea id="ed-fields"></textarea></div>
+      <div class="form-group"><label>เงื่อนไขการกรองข้อมูล (Filter)</label><textarea id="ed-filter"></textarea></div>
+      <div class="form-group"><label>หมายเหตุ / ข้อมูลเพิ่มเติมจากผู้ขอ</label><textarea id="ed-note-user"></textarea></div>
+      <div class="form-group admin-only" id="ed-note-grp" style="display:none">
+        <label>หมายเหตุ Admin / ไอที</label>
+        <textarea id="ed-note" placeholder="หมายเหตุจากผู้ดูแลระบบ..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="modal-edit">ยกเลิก</button>
+      <button class="btn btn-primary" id="edit-save-btn">💾 บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-pdf">
+  <div class="modal modal-xl">
+    <div class="modal-header">
+      <h2>📄 รายงาน PDF</h2>
+      <button class="close-btn" data-close="modal-pdf">✕</button>
+    </div>
+    <div class="modal-body" style="background:var(--gray-100)">
+      <div class="pdf-page" id="pdf-content"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="modal-pdf">ปิด</button>
+      <button class="btn btn-primary" id="pdf-download-btn">⬇/🖨️ ดาวน์โหลดหรือพิมพ์ PDF</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-email">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2>✉️ ส่งอีเมลแจ้งเตือน</h2>
+      <button class="close-btn" data-close="modal-email">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="email-form-wrap">
+        <div class="form-group"><label>ถึง (To) *</label><input type="email" id="em-to" placeholder="recipient@hospital.go.th"></div>
+        <div class="form-group"><label>สำเนา (CC)</label><input type="email" id="em-cc" placeholder="cc@hospital.go.th"></div>
+        <div class="form-group"><label>หัวเรื่อง</label><input type="text" id="em-subject" readonly style="background:var(--gray-50)"></div>
+        <div class="form-group">
+          <label>หมายเหตุเพิ่มเติม</label>
+          <textarea id="em-note" placeholder="ข้อความเพิ่มเติม (ไม่จำเป็น)..."></textarea>
+        </div>
+      </div>
+      <div class="email-sent-anim" id="email-sent-anim">
+        <div class="sent-icon">📨</div>
+        <h3>ส่งอีเมลสำเร็จ!</h3>
+        <p>ระบบได้ส่งอีเมลแจ้งเตือนไปยังผู้รับเรียบร้อยแล้ว</p>
+      </div>
+    </div>
+    <div class="modal-footer" id="email-footer">
+      <button class="btn btn-secondary" data-close="modal-email">ยกเลิก</button>
+      <button class="btn btn-primary" id="email-send-btn">📤 ส่งอีเมล</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-delete">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2>⚠️ ยืนยันการลบ</h2>
+      <button class="close-btn" data-close="modal-delete">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:14px;color:var(--gray-600)">คุณต้องการลบคำขอ <strong id="delete-req-no"></strong> ใช่หรือไม่?<br>การกระทำนี้ไม่สามารถยกเลิกได้</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="modal-delete">ยกเลิก</button>
+      <button class="btn btn-danger" id="delete-confirm-btn">🗑️ ลบ</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-user">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="user-modal-title">จัดการผู้ใช้</h2>
+      <button class="close-btn" data-close="modal-user">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Username (แก้ไขไม่ได้)</label>
+        <input type="text" id="u-username">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="u-password">
+      </div>
+      <div class="form-group">
+        <label>ชื่อที่แสดง</label>
+        <input type="text" id="u-display">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="u-email">
+      </div>
+      <div class="form-group">
+        <label style="color:var(--green); font-weight: bold;">LINE User ID / Group ID (สำหรับดึงข้อมูลแจ้งเตือนตรงตัวบุคคล)</label>
+        <input type="text" id="u-lineid" placeholder="ตัวอย่าง: U123456789abcdef... หรือ Group ID">
+        <small style="color: var(--gray-600); font-size:11px;">* นำ Bot เข้ากลุ่มไลน์พิมพ์ <b>@id</b> เพื่อเอาค่านี้มาใส่</small>
+      </div>
+      <div class="form-group">
+        <label style="color:#229ED9; font-weight: bold;">Telegram Chat ID (สำหรับดึงข้อมูลแจ้งเตือนตรงตัวบุคคล)</label>
+        <input type="text" id="u-telegramid" placeholder="ตัวอย่าง: 123456789">
+        <small style="color: var(--gray-600); font-size:11px;">* แอดบอทแล้วพิมพ์หาบอท หรือหา ID จาก <b>@userinfobot</b></small>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>บทบาท</label>
+          <select id="u-role">
+            <option value="doctor">User (Doctor/Nurse)</option>
+            <option value="admin">Admin (IT)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>แผนก</label>
+          <input type="text" id="u-dept">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="modal-user">ยกเลิก</button>
+      <button class="btn btn-primary" onclick="handleSaveUser()">💾 บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<?!= include('JavaScript'); ?>
+</body>
+</html>
